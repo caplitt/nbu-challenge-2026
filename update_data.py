@@ -25,7 +25,20 @@ CUTOFF_MONTH = "2026-09"
 # Реальний ВВП: ручні оновлення (q/q з урахуванням сезонності, %). Джерело — Держстат.
 # Перевірте уточнену оцінку Держстату (вересень) і виправте, якщо змінилась.
 GDP_UPDATES = {
-    "2026Q2": (0.4, "Держстат, оперативна оцінка 04.08.2026: +0,4% кв/кв SA (+0,6% р/р)"),
+    "2026Q2": (0.3, "Держстат, розгорнуті дані (коментар НБУ 17.09.2026): +0,3% кв/кв SA, +0,4% р/р; "
+                    "оперативна оцінка 04.08.2026 була +0,4% кв/кв"),
+}
+
+# Припущення для єврозони на горизонті прогнозу (після останніх фактичних даних).
+# HICP і ВВП — середньорічні прирости за прогнозом ЄЦБ (вересень 2026): у кожному році
+# невідомі квартали ростуть з однаковим темпом так, щоб середньорічний приріст дорівнював цілі.
+# Ставка ЄЦБ — на кінець кварталу; ринок закладав ≈ +85 б.п. до кінця 2027 (від 2,25%).
+EA_ASSUMPTIONS = {
+    "source": "ECB staff macroeconomic projections, September 2026; ринкові очікування (OIS) перед засіданням ЄЦБ 10.09.2026",
+    "hicp_annual": {2026: 3.0, 2027: 2.5, 2028: 2.1},
+    "gdp_annual": {2026: 0.9, 2027: 1.4, 2028: 1.5},
+    "dfr": {"2026Q4": 2.75, "2027Q1": 3.0, "2027Q2": 3.0, "2027Q3": 3.0, "2027Q4": 3.0,
+            "2028Q1": 2.75, "2028Q2": 2.75, "2028Q3": 2.5, "2028Q4": 2.5},
 }
 
 
@@ -91,12 +104,39 @@ def update_quarterly(log):
 
 
 def _chain(level_tmpl: pd.Series, actual_growth: pd.Series, anchor: pd.Period) -> pd.Series:
-    """Replace values after `anchor` with actual growth, then keep template growth for the rest."""
+    """Replace values after `anchor` with actual growth (q/q factors); later quarters are left as NaN."""
     out = level_tmpl.copy()
-    tmpl_growth = level_tmpl / level_tmpl.shift(1)
     for p in out.index[out.index > anchor]:
         g = actual_growth.get(p, np.nan)
-        out[p] = out[p - 1] * (g if not pd.isna(g) else tmpl_growth[p])
+        out[p] = out[p - 1] * g if not pd.isna(g) else np.nan
+    return out
+
+
+def _fill_annual_targets(level: pd.Series, targets: dict[int, float]) -> pd.Series:
+    """Fill NaN quarters so that each year's average level grows by targets[year] % vs the previous year.
+    Unknown quarters within a year share one constant q/q growth (found by bisection)."""
+    out = level.copy()
+    for year in sorted(targets):
+        qs = [pd.Period(year=year, quarter=k, freq="Q") for k in range(1, 5)]
+        missing = [q for q in qs if pd.isna(out.get(q, np.nan))]
+        if not missing:
+            continue
+        prev_avg = np.mean([out[pd.Period(year=year - 1, quarter=k, freq="Q")] for k in range(1, 5)])
+
+        def avg_growth(g):
+            tmp = out.copy()
+            for q in qs:
+                if q in missing:
+                    tmp[q] = tmp[q - 1] * (1 + g)
+            return np.mean([tmp[q] for q in qs]) / prev_avg - 1
+
+        lo, hi = -0.05, 0.05
+        for _ in range(100):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if avg_growth(mid) < targets[year] / 100 else (lo, mid)
+        for q in qs:
+            if q in missing:
+                out[q] = out[q - 1] * (1 + mid)
     return out
 
 
@@ -108,11 +148,17 @@ def update_foreign(log):
     hicp.to_csv(RAW / "ea_hicp_2025eq100.csv", header=["hicp"])
     full = hicp.groupby(hicp.index.asfreq("Q")).agg(["mean", "count"])
     hq = full.loc[full["count"] == 3, "mean"]
-    cpi_new = _chain(dx["CPI_EA"], hq / hq.shift(1), anchor)
+    # The new HICP (COICOP 2018, EA21) is linked to the template series through official y/y rates:
+    # chaining q/q growth across the change of base/composition distorts the y/y profile.
+    yoy = hq / hq.shift(4)
+    cpi_link = dx["CPI_EA"].copy()
+    for p in cpi_link.index[cpi_link.index > anchor]:
+        cpi_link[p] = cpi_link[p - 4] * yoy[p] if p in yoy.index and not pd.isna(yoy[p]) else np.nan
+    cpi_new = _fill_annual_targets(cpi_link, EA_ASSUMPTIONS["hicp_annual"])
 
     gdp = fetch.ea_gdp("2024-Q1")
     gdp.to_csv(RAW / "ea_gdp_i10.csv", header=["gdp"])
-    gdp_new = _chain(dx["GDP_EA"], gdp / gdp.shift(1), anchor)
+    gdp_new = _fill_annual_targets(_chain(dx["GDP_EA"], gdp / gdp.shift(1), anchor), EA_ASSUMPTIONS["gdp_annual"])
 
     dfr = fetch.ecb_deposit_rate("2024-01-01")
     dfr.to_csv(RAW / "ecb_dfr.csv", header=["dfr"])
@@ -125,18 +171,25 @@ def update_foreign(log):
     for p in dfr_q.index:
         if anchor < p <= last_full_q:
             ir_new[p] = dfr_q[p]
+    for per, v in EA_ASSUMPTIONS["dfr"].items():
+        ir_new[pd.Period(per, "Q")] = v
 
     tbl = pd.DataFrame({"HICP шаблон": dx["CPI_EA"], "HICP новий": cpi_new.round(2),
                         "ВВП шаблон": dx["GDP_EA"], "ВВП новий": gdp_new.round(2),
                         "DFR шаблон": dx["IR_EA"], "DFR новий": ir_new}).loc["2025Q3":"2027Q4"]
     log.append("## Єврозона\n")
     log.append(f"Фактичні дані замінюють шаблон для кварталів з повними даними (HICP: {hq.index.max()}, "
-               f"ВВП: {gdp.index.max()}, ставка ЄЦБ: {last_full_q}); далі — прирости з припущень шаблону НБУ.\n")
+               f"ВВП: {gdp.index.max()}, ставка ЄЦБ: {last_full_q}); далі — припущення: {EA_ASSUMPTIONS['source']}.\n")
     log.append(tbl.to_markdown() + "\n")
-    log.append("Джерела: HICP — Eurostat prc_hicp_minr (EA, 2025=100), ланцюгово до ряду шаблону; ВВП — ECB MNA "
-               "(EA21, I10), ланцюгово; ставка — депозитна ставка ЄЦБ на кінець кварталу.\n")
-    log.append("**TODO:** оновити припущення на горизонті прогнозу за вересневим прогнозом ЄЦБ (2026) "
-               "та ринковими очікуваннями щодо ставок.\n")
+    ann = pd.DataFrame({
+        "HICP, % (сер. за рік)": [cpi_new[str(y)].mean() / cpi_new[str(y - 1)].mean() * 100 - 100 for y in (2025, 2026, 2027, 2028)],
+        "ВВП, % (сер. за рік)": [gdp_new[str(y)].mean() / gdp_new[str(y - 1)].mean() * 100 - 100 for y in (2025, 2026, 2027, 2028)],
+    }, index=[2025, 2026, 2027, 2028]).round(2)
+    log.append("Перевірка: середньорічні прирости після заповнення\n")
+    log.append(ann.to_markdown() + "\n")
+    log.append("Джерела: HICP — Eurostat prc_hicp_minr (EA, 2025=100), прив'язано до ряду шаблону через офіційні "
+               "річні темпи; ВВП — ECB MNA (EA21, I10), ланцюгово через кв/кв; ставка — депозитна ставка ЄЦБ "
+               "на кінець кварталу.\n")
     dx["CPI_EA"], dx["GDP_EA"], dx["IR_EA"] = cpi_new.round(3), gdp_new.round(3), ir_new
     write_iris_csv(dx, OUT / "foreign.csv", com)
 
