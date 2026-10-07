@@ -267,8 +267,8 @@
   "Затримка допомоги": 3.1
  },
  "reserves_recent": {
-  "sales_per_month": 5.04,
-  "inflows_per_month": 3.65
+  "sales_per_month": 5.042,
+  "inflows_per_month": 3.651
  },
  "backtest_rmse": [
   {

@@ -28,9 +28,11 @@ def read_iris_csv(path) -> tuple[pd.DataFrame, dict]:
     raw = pd.read_csv(path, header=0, dtype=str, keep_default_na=False)
     first = raw.columns[0]
     comments = {}
-    if raw.iloc[0, 0].strip().lower() == "comments":
+    if raw.iloc[0, 0].strip().lower().startswith("comments"):
         comments = raw.iloc[0, 1:].to_dict()
-        raw = raw.iloc[1:]
+    # newer IRIS versions add header rows such as "Comments ->", "Class[Size] ->", "Units ->"
+    is_date = raw[first].str.strip().str.fullmatch(r"\d{4}[MQ]\d{1,2}")
+    raw = raw[is_date]
     idx = pd.PeriodIndex([_parse_period(x) for x in raw[first]])
     df = raw.drop(columns=first).replace("", np.nan).astype(float)
     df.index = idx

@@ -8,8 +8,8 @@ const ROOT = path.resolve(__dirname, "..");
 const DATA = JSON.parse(fs.readFileSync(path.join(__dirname, "deck_data.json"), "utf8"));
 const OUT_DIR = path.join(ROOT, "presentation");
 const OUT = path.join(OUT_DIR, "NBU_University_Challenge_2026.pptx");
-const APPLY_THEME = process.env.PPTX_SKILL_DIR
-  ? path.join(process.env.PPTX_SKILL_DIR, "scripts", "apply_theme.js") : null;
+// writes THEME colours/name into the deck's theme part (pptxgenjs cannot); vendored from the pptx skill
+const APPLY_THEME = path.join(__dirname, "apply_theme.js");
 
 // ------------------------------------------------------------------ theme (deep teal + hryvnia gold)
 const THEME = {
@@ -363,7 +363,7 @@ pres.writeFile({ fileName: OUT }).then(async (f) => {
     const { applyTheme } = require(APPLY_THEME);
     await applyTheme(OUT, THEME);
   } else {
-    console.warn("apply_theme.js не знайдено (PPTX_SKILL_DIR) — тема Office за замовчуванням для схемних кольорів");
+    console.warn("deck/apply_theme.js не знайдено — схемні кольори будуть стандартними для Office");
   }
   console.log("Збережено:", f);
 });

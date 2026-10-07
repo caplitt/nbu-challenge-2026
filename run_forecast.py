@@ -143,8 +143,8 @@ def main():
         "fan_cpi_2027Q4": bands["d4l_cpi"].loc[pd.Period("2027Q4")].round(2).to_dict(),
         "reserves_end2026": resv.iloc[-1].round(1).to_dict(),
         "reserves_months_imports_end2026": (resv.iloc[-1] / reserves.IMPORTS_PER_MONTH).round(1).to_dict(),
-        "reserves_recent": {"sales_per_month": round(resv.attrs["sales"], 2),
-                            "inflows_per_month": round(resv.attrs["recent_inflows"], 2)},
+        "reserves_recent": {"sales_per_month": round(resv.attrs["sales"], 3),
+                            "inflows_per_month": round(resv.attrs["recent_inflows"], 3)},
         "backtest_rmse": bt_err.reset_index().rename(columns={"level_0": "origin", "level_1": "var"}).to_dict(orient="records"),
         "vs_nbu": comp.to_dict(),
         "sigma": sigma.round(2).to_dict(),
@@ -247,7 +247,8 @@ def main():
     series = {"Факт": hist_r}
     series.update({k: resv[k] for k in resv.columns})
     pl.monthly_panel(axr[0], series, "Міжнародні резерви: сценарії надходжень у IV кв. 2026", "$ млрд")
-    axr[0].legend(loc="lower center", ncol=2)
+    axr[0].legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=4, fontsize=8)
+    fig.subplots_adjust(bottom=0.25)
     axr[0].axhline(3 * reserves.IMPORTS_PER_MONTH, color=pl.SERIES[7], lw=1)
     axr[0].annotate("3 місяці імпорту", xy=(0.01, 3 * reserves.IMPORTS_PER_MONTH), xycoords=("axes fraction", "data"),
                     xytext=(0, 3), textcoords="offset points", fontsize=8, color=pl.INK["secondary"])
