@@ -94,12 +94,65 @@ def line_panel(ax, series: dict[str, pd.Series], title: str, first_fore: pd.Peri
     return ax
 
 
-def save(fig, path):
+def save(fig, path, source: str | None = None):
+    """Save a figure; `source` adds a muted 'Джерело: ...' line under the chart (as in NBU reports)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if source:
+        fig.text(0.01, 0.005, f"Джерело: {source}", fontsize=8, color=INK["muted"], ha="left", va="bottom")
+        fig.subplots_adjust(bottom=max(fig.subplotpars.bottom, 0.14))
     fig.savefig(path)
     plt.close(fig)
     return path
+
+
+def monthly_panel(ax, series: dict[str, pd.Series], title: str, unit: str = "", target: float | None = None,
+                  target_label: str | None = None, markers: bool = False, start: str | None = None):
+    """Monthly lines (PeriodIndex 'M'), fixed colour order, optional target line, end-point dots."""
+    for i, (name, s) in enumerate(series.items()):
+        if start:
+            s = s.loc[start:]
+        valid = s.dropna()
+        if markers:
+            ax.plot(valid.index.to_timestamp(), valid.values, color=SERIES[i], label=name, marker="o", ms=4,
+                    mec=INK["surface"], mew=1)
+        else:
+            # full monthly range so that gaps in the data break the line instead of being bridged
+            full = s.reindex(pd.period_range(valid.index.min(), valid.index.max(), freq="M"))
+            ax.plot(full.index.to_timestamp(), full.values, color=SERIES[i], label=name)
+            ax.plot(valid.index[-1:].to_timestamp(), valid.values[-1:], "o", ms=5, color=SERIES[i],
+                    mec=INK["surface"], mew=1.5)
+    if target is not None:
+        ax.axhline(target, color=INK["secondary"], lw=1)
+        if target_label:
+            ax.annotate(target_label, xy=(1, target), xycoords=("axes fraction", "data"), xytext=(0, 3),
+                        textcoords="offset points", ha="right", va="bottom", color=INK["secondary"], fontsize=8)
+    ax.set_title(title + (f", {unit}" if unit else ""))
+    import matplotlib.dates as mdates
+    ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 7]))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m.%y"))
+    if len(series) >= 2:
+        ax.legend(loc="best")
+    return ax
+
+
+def bar_panel(ax, s: pd.Series, title: str, unit: str = "", colour: str | None = None, labels=None,
+              value_fmt: str | None = None, highlight: dict | None = None):
+    """Columns grow from a single baseline; 2px surface gap between neighbours; optional value labels."""
+    x = np.arange(len(s))
+    colours = [highlight.get(k, colour or SERIES[0]) if highlight else (colour or SERIES[0]) for k in s.index]
+    ax.bar(x, s.values, width=0.7, color=colours, edgecolor=INK["surface"], linewidth=1.5, zorder=3)
+    ax.axhline(0, color=INK["axis"], lw=1, zorder=4)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels if labels is not None else [str(i) for i in s.index], fontsize=8)
+    ax.grid(axis="x", visible=False)
+    if value_fmt:
+        for xi, v in zip(x, s.values):
+            if not np.isnan(v):
+                ax.annotate(value_fmt.format(v), (xi, v), xytext=(0, 3 if v >= 0 else -10), textcoords="offset points",
+                            ha="center", fontsize=8, color=INK["secondary"])
+    ax.set_title(title + (f", {unit}" if unit else ""))
+    return ax
 
 
 def grid(nrows, ncols, width=11, height=6.2):

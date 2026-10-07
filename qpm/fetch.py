@@ -107,3 +107,12 @@ def ea_hicp(start="2024-01") -> pd.Series:
     inv = {v: k for k, v in tl.items()}
     s = pd.Series({pd.Period(inv[int(k)], "M"): v for k, v in d["value"].items()}).sort_index()
     return s
+
+
+def fred(series_id: str, start: str = "2023-01-01") -> pd.Series:
+    """FRED series (no API key needed for the CSV endpoint), e.g. DCOILBRENTEU = Brent, $/bbl."""
+    txt = _get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}").text
+    df = pd.read_csv(io.StringIO(txt))
+    s = pd.to_numeric(df.iloc[:, 1], errors="coerce")
+    s.index = pd.to_datetime(df.iloc[:, 0])
+    return s.dropna()

@@ -33,7 +33,8 @@ def read_ir_chart(sheet: str, path=IR_CHARTS, lang: str = "ua") -> pd.DataFrame:
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     rows = [list(r) for r in wb[sheet].iter_rows(values_only=True)]
     data = rows[3:]
-    label_col = 1 if any(isinstance(r[1], str) and QLAB.match(r[1].strip()) for r in data if len(r) > 1) else 0
+    label_col = 1 if any(isinstance(r[1], str) and QLAB.match(r[1].replace("І", "I").strip())
+                         for r in data if len(r) > 1) else 0
     name_row = rows[1] if lang == "ua" else rows[2]
     names = []
     for v in name_row[label_col + 1:]:
@@ -45,6 +46,8 @@ def read_ir_chart(sheet: str, path=IR_CHARTS, lang: str = "ua") -> pd.DataFrame:
     for r in data:
         vals = [_num(v) for v in r[label_col + 1: label_col + 1 + len(names)]]
         lab = r[label_col] if label_col < len(r) else None
+        if isinstance(lab, str):
+            lab = lab.replace("І", "I").strip()   # Cyrillic І in some quarter labels
         if isinstance(lab, (dt.datetime, dt.date)):
             per = pd.Period(lab, "M")
         elif isinstance(lab, str) and QLAB.match(lab.strip()):
