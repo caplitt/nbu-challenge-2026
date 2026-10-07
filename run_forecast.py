@@ -38,7 +38,9 @@ def main():
 
     # ------------------------------------------------------------- scenarios and policy options
     base_plan = pipeline.base_plan(ctx)
-    scen = {name: pipeline.run(ctx, fn(base_plan.copy(), f)) for name, fn in cfg.SCENARIOS.items()}
+    rec = cfg.RECOMMENDED_RATE_PATH
+    scen = {name: pipeline.run(ctx, pipeline.with_rate_path(fn(base_plan.copy(), f), rec))
+            for name, fn in cfg.SCENARIOS.items()}
     base = scen["Базовий"]
     pol = {name: pipeline.run(ctx, pipeline.with_rate_path(base_plan, path)) for name, path in cfg.POLICY_OPTIONS.items()}
     # optimal rate path (min of quadratic loss), with sensitivity to the smoothing weight
@@ -61,7 +63,9 @@ def main():
     # policy options: simple loss = sum over 2027-2028 of (CPI - target)^2 + 0.5 * gap^2
     per_loss = pd.period_range("2027Q1", "2028Q4", freq="Q")
     pol_tab = pd.DataFrame({
-        name: {"Ставка IV кв. 2026": df.loc[f, "ir_pol"], "Ставка IV кв. 2027": _q(df, "ir_pol", "2027Q4"),
+        name: {"Ставка IV кв. 2026": df.loc[f, "ir_pol"], "Ставка I кв. 2027": _q(df, "ir_pol", "2027Q1"),
+               "Ставка IV кв. 2027": _q(df, "ir_pol", "2027Q4"),
+               "ІСЦ I кв. 2027": _q(df, "d4l_cpi", "2027Q1"), "ВВП 2027, %": float(pipeline.annual_table(df).loc["Реальний ВВП, % (рік)", 2027]),
                "ІСЦ IV кв. 2027": _q(df, "d4l_cpi", "2027Q4"), "ІСЦ II кв. 2028": _q(df, "d4l_cpi", "2028Q2"),
                "Розрив ВВП, сер. 2027": df["l_gdp_gap"].loc["2027Q1":"2027Q4"].mean(),
                "Втрати (інфляція² + 0,5·розрив²)": float(((df.loc[per_loss, "d4l_cpi"] - tar) ** 2
@@ -133,6 +137,7 @@ def main():
         "baseline_annual": {str(y): {k: float(v) for k, v in annual[y].items()} for y in annual.columns},
         "scenarios": scen_tab.to_dict(orient="index"),
         "policy_options": pol_tab.to_dict(orient="index"),
+        "recommendation": cfg.RECOMMENDATION,
         "optimal_paths": opt_tab.to_dict(orient="index"),
         "p_cpi_in_target_range": p_in_range,
         "fan_cpi_2027Q4": bands["d4l_cpi"].loc[pd.Period("2027Q4")].round(2).to_dict(),
@@ -161,14 +166,18 @@ def main():
                   bands=[(br["q15"], br["q85"], pl.BLUE_RAMP[150]), (br["q30"], br["q70"], pl.BLUE_RAMP[250])])
     pl.save(fig, FIG / "fc_fan.png", "розрахунки команди (QPM НБУ; віяло — інтервали 40% і 70% імовірності), НБУ")
 
-    # 2) scenarios
-    fig, ax = pl.grid(2, 2, height=6.4)
+    # 2) scenarios (one strip of four panels: fits a full-width slide)
+    fig, ax = pl.grid(1, 4, width=15, height=3.5)
     pl.line_panel(ax[0], {k: v["d4l_cpi"] for k, v in scen.items()}, "Інфляція (ІСЦ)", f, target=tar,
                   target_label="ціль 5%", unit="% р/р", rng=RNG, shared_history=True)
-    pl.line_panel(ax[1], {k: v["ir_pol"] for k, v in scen.items()}, "Облікова ставка", f, unit="%", rng=RNG, shared_history=True)
-    pl.line_panel(ax[2], {k: v["uah_eur"] for k, v in scen.items()}, "Курс", f, unit="грн/€", rng=RNG, shared_history=True)
+    pl.line_panel(ax[1], {k: v["ir_pol"] for k, v in scen.items()}, "Облікова ставка", f, unit="%", rng=RNG,
+                  shared_history=True)
+    pl.line_panel(ax[2], {k: v["uah_eur"] for k, v in scen.items()}, "Курс", f, unit="грн/€", rng=RNG,
+                  shared_history=True)
     pl.line_panel(ax[3], {k: v["l_gdp_gap"] for k, v in scen.items()}, "Розрив ВВП", f, target=0,
                   unit="% потенціалу", rng=RNG, shared_history=True)
+    for a in ax[1:]:
+        a.get_legend().remove() if a.get_legend() else None
     pl.save(fig, FIG / "fc_scenarios.png", "розрахунки команди (QPM НБУ)")
 
     # 3) policy options
@@ -233,11 +242,12 @@ def main():
     pl.save(fig, FIG / "fc_backtest.png", "розрахунки команди: прогноз без суджень, зовнішні змінні — факт")
 
     # 7) reserves
-    fig, axr = pl.grid(1, 1, width=7.5, height=3.6)
+    fig, axr = pl.grid(1, 1, width=7.5, height=4.9)
     hist_r = reserves.implied_inflows()["Резерви"].loc["2025-07":]
     series = {"Факт": hist_r}
     series.update({k: resv[k] for k in resv.columns})
     pl.monthly_panel(axr[0], series, "Міжнародні резерви: сценарії надходжень у IV кв. 2026", "$ млрд")
+    axr[0].legend(loc="lower center", ncol=2)
     axr[0].axhline(3 * reserves.IMPORTS_PER_MONTH, color=pl.SERIES[7], lw=1)
     axr[0].annotate("3 місяці імпорту", xy=(0.01, 3 * reserves.IMPORTS_PER_MONTH), xycoords=("axes fraction", "data"),
                     xytext=(0, 3), textcoords="offset points", fontsize=8, color=pl.INK["secondary"])
@@ -251,6 +261,22 @@ def main():
     pl.line_panel(ax[1], {"Реальна облікова ставка": base["rir_pol"], "Нейтральна реальна ставка": base["rir_tnd"]},
                   "Реальна ставка", f, unit="%", rng=RNG)
     pl.save(fig, FIG / "fc_trends.png", "розрахунки команди (QPM НБУ, фільтр Калмана)")
+
+    # 9) monthly CPI with the short-term nowcast and NBU's July path
+    if nc is not None:
+        cpi_m = pd.read_csv("data/overview/cpi.csv", index_col=0, encoding="utf-8-sig")
+        cpi_m.index = pd.PeriodIndex(cpi_m.index, freq="M")
+        act = cpi_m["cpi_yoy"].loc["2025-01":]
+        nowc = pd.concat([act.iloc[-1:], nc["ІСЦ р/р, прогноз"]])
+        fig, axn = pl.grid(1, 1, width=7, height=3.6)
+        pl.monthly_panel(axn[0], {"Факт": act, "Наш короткостроковий прогноз": nowc}, "Інфляція (ІСЦ)", "% р/р",
+                         target=tar, target_label="ціль 5%")
+        nbu_pts = {pd.Period("2026-09", "M"): float(nbu_cpi[pd.Period("2026Q3")]),
+                   pd.Period("2026-12", "M"): float(nbu_cpi[pd.Period("2026Q4")])}
+        axn[0].scatter([p.to_timestamp() for p in nbu_pts], list(nbu_pts.values()), marker="D", s=30,
+                       color=pl.SERIES[2], zorder=6, label="Прогноз НБУ (липень), кінець кварталу")
+        axn[0].legend(loc="upper right")
+        pl.save(fig, FIG / "fc_nowcast.png", "Держстат, НБУ; розрахунки команди (тренд + сезонність + судження)")
 
     print("Графіки:", sorted(p.name for p in FIG.glob("fc_*.png")))
 

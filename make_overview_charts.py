@@ -40,15 +40,18 @@ def expectations():
 
 
 def rates():
-    r, cpi = overview.load("rates"), overview.load("cpi")
+    r, cpi, e = overview.load("rates"), overview.load("cpi"), overview.load("expectations")
     real = (r["Облікова ставка"] - cpi["cpi_yoy"]).dropna()
-    fig, ax = pl.grid(1, 2, height=3.6)
+    fig, ax = pl.grid(1, 3, width=14, height=3.6)
     pl.monthly_panel(ax[0], {"Облікова ставка": r["Облікова ставка"],
-                             "Строкові депозити ФО (середньозв.)": r["Середьозважена ФО"],
+                             "Строкові депозити ФО": r["Середьозважена ФО"],
                              "ІСЦ, р/р": cpi["cpi_yoy"]}, "Ставки та інфляція", "%", start=START)
-    pl.monthly_panel(ax[1], {"Облікова ставка мінус поточна інфляція": real}, "Реальна облікова ставка (ex post)",
+    pl.monthly_panel(ax[1], {"Облікова ставка мінус інфляція": real}, "Реальна облікова ставка (ex post)",
                      "в. п.", target=0, start=START)
-    pl.save(fig, FIG / "ov_rates.png", "НБУ, Держстат; розрахунки команди")
+    pl.monthly_panel(ax[2], {"Домогосподарства": e["Домогосподарства"], "Підприємства": e["Підприємства"],
+                             "Банки": e["Банки"], "Фінансові аналітики": e["Фінансові аналітики"]},
+                     "Інфляційні очікування на 12 міс.", "%", markers=True, start=START)
+    pl.save(fig, FIG / "ov_rates.png", "НБУ (Інфляційний звіт, липень 2026), Держстат; розрахунки команди")
 
 
 def fx():
@@ -114,7 +117,7 @@ def external():
 def fx_households():
     h = overview.load("fx_market_households")
     s = h["CliBuyPerMFO"].loc["2025-09":]
-    fig, ax = pl.grid(1, 1, width=6.5, height=3.6)
+    fig, ax = pl.grid(1, 1, width=6.5, height=4.6)
     pl.bar_panel(ax[0], s, "Безготівкова купівля валюти населенням", "$ млрд на місяць",
                  labels=[p.strftime("%m.%y") for p in s.index], value_fmt="{:.2f}",
                  highlight={p: pl.SERIES[1] for p in s.index if p >= pd.Period("2026-08", "M")})

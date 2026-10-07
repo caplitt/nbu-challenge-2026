@@ -55,6 +55,10 @@ def base_plan(ctx, judgments: bool = True) -> Plan:
                 plan.exogenize("l_cpi", [p], [ctx["dq"].loc[p, "L_CPI"]])
                 plan.endogenize("res_dl_cpi", [p])
     if judgments:
+        fx = {pd.Period(k, "Q"): v for k, v in getattr(cfg, "FX_TARGET_PATH", {}).items() if pd.Period(k, "Q") in fc}
+        if fx:
+            plan.exogenize("dl_er_tar", list(fx), list(fx.values()))
+            plan.endogenize("res_dl_er_tar", list(fx))
         for j in getattr(cfg, "JUDGMENTS", []):
             pers = [pd.Period(x, "Q") for x in j["periods"]]
             keep = [(p, v) for p, v in zip(pers, j["values"]) if p in fc]

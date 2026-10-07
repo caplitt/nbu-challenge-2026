@@ -14,7 +14,7 @@ import pandas as pd
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 BLUE_RAMP = {100: "#cde2fb", 150: "#b7d3f6", 200: "#9ec5f4", 250: "#86b6ef", 300: "#6da7ec"}
 INK = {"primary": "#0b0b0b", "secondary": "#52514e", "muted": "#898781",
-       "grid": "#e1e0d9", "axis": "#c3c2b7", "surface": "#fcfcfb", "forecast": "#f0efec"}
+       "grid": "#e1e0d9", "axis": "#c3c2b7", "surface": "#ffffff", "forecast": "#f0efec"}
 
 plt.rcParams.update({
     "font.family": ["Segoe UI", "DejaVu Sans"],
