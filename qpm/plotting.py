@@ -63,8 +63,10 @@ def _quarter_ticks(ax, start: pd.Period, end: pd.Period):
 def line_panel(ax, series: dict[str, pd.Series], title: str, first_fore: pd.Period | None = None,
                target: float | None = None, target_label: str | None = None, unit: str = "",
                rng: tuple[str, str] | None = None, bands: list[tuple[pd.Series, pd.Series, str]] | None = None,
-               end_labels: bool = True, fmt: str = "{:.1f}"):
-    """One panel: several series (fixed colour order), forecast shading, optional target line and fan bands."""
+               end_labels: bool = True, fmt: str = "{:.1f}", shared_history: bool = False):
+    """One panel: several series (fixed colour order), forecast shading, optional target line and fan bands.
+
+    shared_history: series share the same past (scenarios) — draw it once in ink, colours only on the forecast."""
     start = pd.Period(rng[0], "Q") if rng else min(s.index.min() for s in series.values())
     end = pd.Period(rng[1], "Q") if rng else max(s.index.max() for s in series.values())
     if first_fore is not None:
@@ -79,9 +81,13 @@ def line_panel(ax, series: dict[str, pd.Series], title: str, first_fore: pd.Peri
             ax.annotate(target_label, xy=(1, target), xycoords=("axes fraction", "data"),
                         xytext=(0, 3), textcoords="offset points", ha="right", va="bottom",
                         color=INK["secondary"], fontsize=8)
+    if shared_history and first_fore is not None:
+        h = next(iter(series.values())).loc[start:first_fore - 1].dropna()
+        ax.plot(_x(h.index), h.values, color=INK["primary"], label="Факт / оцінка", zorder=3)
+        series = {k: v.loc[first_fore - 1:] for k, v in series.items()}
     for i, (name, s) in enumerate(series.items()):
         s = s.loc[start:end].dropna()
-        ax.plot(_x(s.index), s.values, color=SERIES[i], label=name, zorder=3 + i)
+        ax.plot(_x(s.index), s.values, color=SERIES[i], label=name, zorder=4 + i)
     if end_labels and len(series) <= 4:
         for i, (name, s) in enumerate(series.items()):
             s = s.loc[start:end].dropna()

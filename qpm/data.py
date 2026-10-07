@@ -64,12 +64,32 @@ def hp_gap(s: pd.Series, lamb: float = 1600) -> pd.Series:
     return out
 
 
-def read_data(data_dir="data") -> pd.DataFrame:
-    """Return the quarterly databank `dq` exactly as a01_read_data.m builds it."""
+def read_data(data_dir="data", cpi_nowcast: dict | None = None, gdp_nowcast: dict | None = None) -> pd.DataFrame:
+    """Return the quarterly databank `dq` as a01_read_data.m builds it.
+
+    cpi_nowcast: {"2026-09": m-o-m %, ...} fills months without data (actual data always wins).
+    gdp_nowcast: {"2026Q3": q-o-q % SA, ...} fills quarters without GDP data.
+    """
     data_dir = Path(data_dir)
     dm, _ = read_iris_csv(data_dir / "monthly.csv")
     dq, _ = read_iris_csv(data_dir / "quarterly.csv")
     dx, _ = read_iris_csv(data_dir / "foreign.csv")
+    nowcast_months = []
+    for m, v in (cpi_nowcast or {}).items():
+        p = pd.Period(m, "M")
+        if p not in dm.index:
+            dm.loc[p] = np.nan
+        if pd.isna(dm.loc[p, "D_CPI_su_m"]):
+            dm.loc[p, "D_CPI_su_m"] = v
+            nowcast_months.append(p)
+    dm = dm.sort_index()
+    for qtr, v in (gdp_nowcast or {}).items():
+        p = pd.Period(qtr, "Q")
+        if p not in dq.index:
+            dq.loc[p] = np.nan
+        dq = dq.sort_index()
+        if pd.isna(dq.loc[p, "GDP"]):
+            dq.loc[p, "GDP"] = dq.loc[p - 1, "GDP"] * (1 + v / 100)
 
     # Monthly CPI: m-o-m % -> level (2000M1 = 1), then seasonal adjustment
     cpi = (1 + dm["D_CPI_su_m"] / 100).cumprod(skipna=False)
@@ -100,6 +120,7 @@ def read_data(data_dir="data") -> pd.DataFrame:
 
     q["L_GDP_EA_GAP"] = hp_gap(q["L_GDP_EA"])
     q.attrs["months_in_quarter"] = dm["D_CPI_su_m"].notna().groupby(dm.index.asfreq("Q")).sum()
+    q.attrs["cpi_nowcast_months"] = nowcast_months
     return q
 
 

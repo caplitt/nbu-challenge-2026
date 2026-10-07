@@ -38,6 +38,7 @@ SOURCES = {
     "energy": "НБУ, Інфляційний звіт (липень 2026), графік 4.1 (припущення щодо цін на нафту та газ)",
     "brent": "FRED (EIA), DCOILBRENTEU, середнє за місяць",
     "nbu_forecast": "НБУ, таблиця макропрогнозу (липень 2026)",
+    "fx_market_households": "API НБУ (statdirectory/kursf): операції населення з валютою, $ млрд за місяць",
 }
 
 
@@ -128,6 +129,16 @@ def build(start="2023-01", end="2026-09") -> dict[str, pd.DataFrame]:
         if (OUT / "brent.csv").exists():
             out["brent"] = load("brent")
     out["nbu_forecast"] = fc
+
+    hh = []
+    for p in pd.period_range(start, end, freq="M"):
+        rep = (p + 1).start_time.strftime("%Y%m%d")
+        for r in fetch._get(f"{fetch.NBU}/kursf?date={rep}&period=m&json").json():
+            if r["id_api"] in ("CliBuyPerMFO", "CliSelPerMFO", "TotalCliBuyPerMFO", "TotalCliSelPerMFO", "CashVolumBalPerMFO"):
+                hh.append((p, r["id_api"], r["value"] / 1e9))
+    hh = pd.DataFrame(hh, columns=["period", "id", "value"]).pivot(index="period", columns="id", values="value")
+    hh.index = pd.PeriodIndex(hh.index, freq="M")
+    out["fx_market_households"] = hh
 
     for name, df in out.items():
         df.to_csv(OUT / f"{name}.csv", encoding="utf-8-sig")

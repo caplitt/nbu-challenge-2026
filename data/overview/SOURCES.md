@@ -14,3 +14,4 @@
 - `energy.csv` — НБУ, Інфляційний звіт (липень 2026), графік 4.1 (припущення щодо цін на нафту та газ)
 - `brent.csv` — FRED (EIA), DCOILBRENTEU, середнє за місяць
 - `nbu_forecast.csv` — НБУ, таблиця макропрогнозу (липень 2026)
+- `fx_market_households.csv` — API НБУ (statdirectory/kursf): операції населення з валютою, $ млрд за місяць

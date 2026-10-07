@@ -7,3 +7,4 @@ Thumbs.db
 ~$*
 # results are reproducible: python update_data.py && python run_forecast.py
 results/*.csv
+node_modules/

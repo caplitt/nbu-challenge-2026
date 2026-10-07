@@ -111,10 +111,23 @@ def external():
     pl.save(fig, FIG / "ov_external.png", "Eurostat, ЄЦБ (прогноз вересня 2026), НБУ; Brent у вересні — Reuters")
 
 
+def fx_households():
+    h = overview.load("fx_market_households")
+    s = h["CliBuyPerMFO"].loc["2025-09":]
+    fig, ax = pl.grid(1, 1, width=6.5, height=3.6)
+    pl.bar_panel(ax[0], s, "Безготівкова купівля валюти населенням", "$ млрд на місяць",
+                 labels=[p.strftime("%m.%y") for p in s.index], value_fmt="{:.2f}",
+                 highlight={p: pl.SERIES[1] for p in s.index if p >= pd.Period("2026-08", "M")})
+    ax[0].annotate("ліміт 50 → 200 тис. грн/міс" + "\n" + "(з 11.08.2026)", xy=(len(s) - 2, s.iloc[-2]),
+                   xytext=(len(s) - 6.5, s.max() * 0.98),
+                   fontsize=8, color=pl.INK["secondary"], arrowprops=dict(arrowstyle="-", color=pl.INK["muted"], lw=0.8))
+    pl.save(fig, FIG / "ov_fx_households.png", "НБУ (API, statdirectory/kursf)")
+
+
 def main():
     if "--fetch" in sys.argv:
         overview.build()
-    for fn in (inflation, expectations, rates, fx, activity, fiscal, external):
+    for fn in (inflation, expectations, rates, fx, activity, fiscal, external, fx_households):
         fn()
     print("Готово:", sorted(p.name for p in FIG.glob("ov_*.png")))
 
