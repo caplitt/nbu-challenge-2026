@@ -61,8 +61,13 @@ def assumptions():
              "інфляцію з вагою `w_oil` = 0,016 (`model/params.yaml`).")
     L.append("- Деталі та джерела — `data/UPDATE_LOG.md`.\n")
     L.append("## 5. Рішення, за яким будується базовий прогноз\n")
-    L.append(f"- {cfg.RECOMMENDATION['option']}: середня ставка IV кв. 2026 = {n(cfg.RECOMMENDATION['rate'])}%, "
-             "далі — правило Тейлора моделі.")
+    L.append(f"- {cfg.RECOMMENDATION['option']}: середня ставка {n(cfg.RECOMMENDATION['rate'])}% у "
+             f"{', '.join(cfg.HOLD)} (рішення й утримання до середини 2027 р.).")
+    L.append("- Далі — траєкторія ставки, що повертає інфляцію до цілі 5% (точкова ціль, без діапазону) на горизонті "
+             "політики до трьох років (Основні засади ГКП НБУ, 2024; підтверджено 03.09.2026): мінімум "
+             f"Σ w·(π − 5)² + {n(cfg.TARGET_PATH['w_gap'])}·розрив² + {n(cfg.TARGET_PATH['w_smooth'])}·(Δi)², "
+             f"вага w = {n(cfg.TARGET_PATH['w_last'], 0)} з {cfg.TARGET_PATH['last_from']}. За механічним правилом Тейлора "
+             f"інфляція наприкінці 2029 р. була б лише {n(K['rule_after_hold']['2029Q4'])}%.")
     (DOCS / "assumptions.md").write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
@@ -83,8 +88,9 @@ def summary():
           "## Оптимальна траєкторія ставки (чутливість до ваги згладжування λ)\n", md_table(pd.DataFrame(K["optimal_paths"]).T), "\n",
           "## Резерви на кінець 2026 ($ млрд / місяців імпорту)\n",
           md_table(pd.DataFrame({"$ млрд": K["reserves_end2026"], "міс. імпорту": K["reserves_months_imports_end2026"]})), "\n",
-          f"Імовірність, що інфляція буде в діапазоні 5 ± 1%: кінець 2027 — {n(100 * K['p_cpi_in_target_range']['2027Q4'], 0)}%, "
-          f"кінець 2028 — {n(100 * K['p_cpi_in_target_range']['2028Q4'], 0)}%.\n",
+          "Невизначеність (інтервал 70% імовірності для ІСЦ, % р/р): "
+          + "; ".join(f"{q[:4]} — {n(v['q15'])}…{n(v['q85'])} (медіана {n(v['q50'])})" for q, v in K["fan_cpi"].items())
+          + ".\n",
           "## Бектест (RMSE прогнозу на 4 квартали)\n",
           md_table(pd.read_csv(TAB / "backtest_errors.csv", index_col=[0, 1], encoding="utf-8-sig")), "\n"]
     (DOCS / "forecast_summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")

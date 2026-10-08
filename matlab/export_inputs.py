@@ -23,12 +23,7 @@ OBS = ["L_GDP", "L_CPI", "L_CPI_C", "IR_POLICY", "L_ER", "IR_EA", "L_CPI_EA", "L
 
 def scenario_plans(ctx):
     """Exactly the plans run_forecast.py uses: baseline with the recommended decision; scenarios on top."""
-    f = ctx["rngfcast"][0]
-    base_rec = pipeline.with_rate_path(pipeline.base_plan(ctx), cfg.RECOMMENDED_RATE_PATH)
-    plans = {}
-    for name, fn in cfg.SCENARIOS.items():
-        plans[name] = base_rec if name == "Базовий" else fn(pipeline.nowcast_to_shock(ctx, base_rec), f, ctx)
-    return plans
+    return pipeline.scenario_plans(ctx)
 
 
 def write_plan(plan, k):

@@ -88,6 +88,15 @@ def test_look_through_drops_first_round_judgments(ctx):
         assert not any(p.year >= 2027 for p in lt.shocks.get(s, {}))
 
 
+def test_baseline_returns_to_point_target_within_horizon():
+    """NBU: 5% point target (no tolerance band) within a policy horizon of up to three years."""
+    key = json.loads((ROOT / "results/key_numbers.json").read_text(encoding="utf-8"))
+    q = key["baseline_quarterly"]
+    assert q[cfg.LAST_FORE]["d4l_cpi"] == pytest.approx(5.0, abs=0.1)
+    for per, rate in cfg.RECOMMENDED_RATE_PATH.items():       # the decision and the promised hold are kept
+        assert q[per]["ir_pol"] == pytest.approx(rate, abs=1e-6)
+
+
 def test_cpi_nowcast_condition_respected(ctx):
     out = pipeline.run(ctx, pipeline.base_plan(ctx))
     q4 = pd.Period("2026Q4")
@@ -103,7 +112,7 @@ def test_deck_numbers_come_from_model():
     cpi_row = summary["table"]["rows"][0]
     from decimal import ROUND_HALF_UP, Decimal
     fmt = [f"{Decimal(str(q[p]['d4l_cpi'])).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP):f}".replace(".", ",")
-           for p in ("2026Q4", "2027Q4", "2028Q4")]
+           for p in ("2026Q4", "2027Q4", "2028Q4", "2029Q4")]
     assert cpi_row[1:] == fmt
     assert summary["cards"][0]["value"].startswith(f"{key['recommendation']['rate']:.1f}".replace(".", ","))
     assert key["baseline_quarterly"]["2026Q4"]["ir_pol"] == pytest.approx(key["recommendation"]["rate"], abs=1e-6)
@@ -119,7 +128,7 @@ def test_matches_matlab_iris_if_available():
     py = pd.read_csv(ROOT / "matlab" / "inputs" / "forecast1_python.csv", index_col=0)
     py.index = pd.PeriodIndex(py.index, freq="Q")
     for v in ("d4l_cpi", "ir_pol", "l_er", "l_gdp_gap"):
-        d = (py[v] - ml[v]).loc["2026Q4":"2028Q4"].abs().max()
+        d = (py[v] - ml[v]).loc["2026Q4":cfg.LAST_FORE].abs().max()
         assert d < 1e-4, v
 
 

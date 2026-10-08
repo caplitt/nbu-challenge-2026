@@ -40,24 +40,24 @@ def main():
 
     # ------------------------------------------------------------- scenarios and policy options
     base_plan = pipeline.base_plan(ctx)
-    rec = cfg.RECOMMENDED_RATE_PATH
-    base_rec = pipeline.with_rate_path(base_plan, rec)
-    scen = {}
-    for name, fn in cfg.SCENARIOS.items():
-        plan_s = base_rec if name == "Базовий" else fn(pipeline.nowcast_to_shock(ctx, base_rec), f, ctx)
-        scen[name] = pipeline.run(ctx, plan_s)
+    # baseline = decision + hold, then the path returning inflation to the 5% point target within the horizon
+    scen = {name: pipeline.run(ctx, plan) for name, plan in pipeline.scenario_plans(ctx).items()}
     base = scen["Базовий"]
-    pol = {name: pipeline.run(ctx, pipeline.with_rate_path(base_plan, path)) for name, path in cfg.POLICY_OPTIONS.items()}
-    # optimal rate path (min of quadratic loss), with sensitivity to the smoothing weight
+    rule = pipeline.run(ctx, pipeline.with_rate_path(base_plan, cfg.RECOMMENDED_RATE_PATH))
+    print("Базовий vs чисте правило після утримання, ІСЦ IV кв. 2028 / 2029:",
+          [round(float(d.loc[q, "d4l_cpi"]), 2) for d in (base, rule) for q in ("2028Q4", "2029Q4")])
+    pol = {name: pipeline.run(ctx, pipeline.policy_plan(ctx, base_plan, path)) for name, path in cfg.POLICY_OPTIONS.items()}
+    # optimal rate path from the October decision on (min of quadratic loss), sensitivity to the smoothing weight
+    tp = {k: v for k, v in cfg.TARGET_PATH.items() if k != "w_smooth"}
     opt_rows = {}
     for ws in (0.5, 1.0, 2.0):
-        res_o, path_o, L = optimal.optimal_path(ctx, base_plan, w_gap=0.5, w_smooth=ws)
+        res_o, path_o, L = optimal.optimal_path(ctx, base_plan, w_smooth=ws, **tp)
         opt_rows[f"λ = {ws:g}"] = {**{str(p): round(float(v), 2) for p, v in path_o.items()},
                                    "Втрати: оптимум": round(L["optimal"], 1), "Втрати: правило": round(L["rule"], 1)}
-        if ws == 1.0:
+        if ws == cfg.TARGET_PATH["w_smooth"]:
             pol["Оптимальна (мін. втрат)"] = res_o
     # the same with first-round effects of administered prices looked through (they are not in the loss)
-    _, path_lt, L = optimal.optimal_path(ctx, pipeline.base_plan(ctx, look_through=True), w_gap=0.5, w_smooth=1.0)
+    _, path_lt, L = optimal.optimal_path(ctx, pipeline.base_plan(ctx, look_through=True), **cfg.TARGET_PATH)
     opt_rows["λ = 1, без реакції на адмінціни"] = {**{str(p): round(float(v), 2) for p, v in path_lt.items()},
                                                     "Втрати: оптимум": round(L["optimal"], 1), "Втрати: правило": round(L["rule"], 1)}
     opt_tab = pd.DataFrame(opt_rows).T
@@ -69,13 +69,14 @@ def main():
     annual = pipeline.annual_table(base)
     annual.to_csv(TAB / "baseline_annual.csv", encoding="utf-8-sig")
 
-    # policy options: simple loss = sum over 2027-2028 of (CPI - target)^2 + 0.5 * gap^2
-    per_loss = pd.period_range("2027Q1", "2028Q4", freq="Q")
+    # policy options: simple loss over the policy horizon 2027-2029 = sum of (CPI - target)^2 + 0.5 * gap^2
+    per_loss = pd.period_range("2027Q1", cfg.LAST_FORE, freq="Q")
     pol_tab = pd.DataFrame({
         name: {"Ставка IV кв. 2026": df.loc[f, "ir_pol"], "Ставка I кв. 2027": _q(df, "ir_pol", "2027Q1"),
-               "Ставка IV кв. 2027": _q(df, "ir_pol", "2027Q4"),
+               "Ставка IV кв. 2027": _q(df, "ir_pol", "2027Q4"), "Ставка IV кв. 2028": _q(df, "ir_pol", "2028Q4"),
                "ІСЦ I кв. 2027": _q(df, "d4l_cpi", "2027Q1"), "ВВП 2027, %": float(pipeline.annual_table(df).loc["Реальний ВВП, % (рік)", 2027]),
-               "ІСЦ IV кв. 2027": _q(df, "d4l_cpi", "2027Q4"), "ІСЦ II кв. 2028": _q(df, "d4l_cpi", "2028Q2"),
+               "ІСЦ IV кв. 2027": _q(df, "d4l_cpi", "2027Q4"), "ІСЦ IV кв. 2028": _q(df, "d4l_cpi", "2028Q4"),
+               "ІСЦ IV кв. 2029": _q(df, "d4l_cpi", "2029Q4"),
                "Розрив ВВП, сер. 2027": df["l_gdp_gap"].loc["2027Q1":"2027Q4"].mean(),
                "Втрати (інфляція² + 0,5·розрив²)": float(((df.loc[per_loss, "d4l_cpi"] - tar) ** 2
                                                          + 0.5 * df.loc[per_loss, "l_gdp_gap"] ** 2).sum())}
@@ -83,7 +84,8 @@ def main():
     pol_tab.to_csv(TAB / "policy_options.csv", encoding="utf-8-sig")
     scen_tab = pd.DataFrame({
         name: {"ІСЦ IV кв. 2026": _q(df, "d4l_cpi", "2026Q4"), "ІСЦ пік": float(df.loc[fc, "d4l_cpi"].max().round(2)),
-               "ІСЦ IV кв. 2027": _q(df, "d4l_cpi", "2027Q4"), "Ставка пік": float(df.loc[fc, "ir_pol"].max().round(2)),
+               "ІСЦ IV кв. 2027": _q(df, "d4l_cpi", "2027Q4"), "ІСЦ IV кв. 2029": _q(df, "d4l_cpi", "2029Q4"),
+               "Ставка пік": float(df.loc[fc, "ir_pol"].max().round(2)),
                "Ставка IV кв. 2027": _q(df, "ir_pol", "2027Q4"), "Курс IV кв. 2027, грн/€": _q(df, "uah_eur", "2027Q4"),
                "ВВП 2027, % (рік)": float(pipeline.annual_table(df).loc["Реальний ВВП, % (рік)", 2027])}
         for name, df in scen.items()}).T
@@ -95,12 +97,6 @@ def main():
     bands = uncertainty.fan(model, base, fc, sigma)
     for v, b in bands.items():
         b.to_csv(TAB / f"fan_{v}.csv")
-    p_in_range = {}
-    for per in ("2027Q4", "2028Q4"):
-        i = fc.get_loc(pd.Period(per, "Q"))
-        sims = uncertainty.fan(model, base, fc, sigma, variables=("d4l_cpi",), n=2000,
-                               quantiles=tuple(np.linspace(0.005, 0.995, 199)))["d4l_cpi"].iloc[i]
-        p_in_range[per] = float(((sims >= tar - 1) & (sims <= tar + 1)).mean())
 
     # ------------------------------------------------------------- backtest
     full = pipeline.prepare(cfg, use_nowcast=False)
@@ -148,8 +144,8 @@ def main():
         "policy_options": pol_tab.to_dict(orient="index"),
         "recommendation": cfg.RECOMMENDATION,
         "optimal_paths": opt_tab.to_dict(orient="index"),
-        "p_cpi_in_target_range": p_in_range,
-        "fan_cpi_2027Q4": bands["d4l_cpi"].loc[pd.Period("2027Q4")].round(2).to_dict(),
+        "fan_cpi": {q: bands["d4l_cpi"].loc[pd.Period(q)].round(2).to_dict() for q in ("2027Q4", "2028Q4", "2029Q4")},
+        "rule_after_hold": {q: _q(rule, c, q) for q in ("2028Q4", "2029Q4") for c in ("d4l_cpi",)},
         "reserves_end2026": resv.iloc[-1].round(1).to_dict(),
         "reserves_months_imports_end2026": (resv.iloc[-1] / reserves.IMPORTS_PER_MONTH).round(1).to_dict(),
         "reserves_recent": {"sales_per_month": round(resv.attrs["sales"], 3),
@@ -168,7 +164,6 @@ def main():
     pl.line_panel(ax[0], {"Базовий прогноз": base["d4l_cpi"], "Прогноз НБУ (липень), кінець кв.": nbu_cpi_line},
                   "Інфляція (ІСЦ)", f, target=tar, target_label="ціль 5%", unit="% р/р", rng=RNG,
                   bands=[(b["q15"], b["q85"], pl.BLUE_RAMP[150]), (b["q30"], b["q70"], pl.BLUE_RAMP[250])])
-    ax[0].axhspan(tar - 1, tar + 1, color=pl.INK["grid"], alpha=0.5, zorder=0, lw=0)
     br = bands["ir_pol"]
     pl.line_panel(ax[1], {"Базовий прогноз": base["ir_pol"], "Прогноз НБУ (липень)": nbu_rate.loc[f:]},
                   "Облікова ставка", f, unit="%, середнє за квартал", rng=RNG,
@@ -224,9 +219,9 @@ def main():
     dec.to_csv(TAB / "rate_drivers.csv", encoding="utf-8-sig")
 
     # 5) output gap vs NBU
-    ours = base["l_gdp_gap"].groupby(base.index.year).mean().loc[2020:2028]
+    ours = base["l_gdp_gap"].groupby(base.index.year).mean().loc[2020:fc[-1].year]
     fig, axg = pl.grid(1, 1, width=7, height=3.6)
-    yrs = list(range(2020, 2029))
+    yrs = list(range(2020, fc[-1].year + 1))
     xi = np.arange(len(yrs))
     axg[0].bar(xi - 0.18, [ours.get(y, np.nan) for y in yrs], width=0.34, color=pl.SERIES[0], label="Наша оцінка (фільтр Калмана)",
                edgecolor=pl.INK["surface"], lw=1.5)

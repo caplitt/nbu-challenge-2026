@@ -8,6 +8,10 @@ res_ir_ea,2028Q1
 res_ir_ea,2028Q2
 res_ir_ea,2028Q3
 res_ir_ea,2028Q4
+res_ir_ea,2029Q1
+res_ir_ea,2029Q2
+res_ir_ea,2029Q3
+res_ir_ea,2029Q4
 res_l_gdp_ea_gap,2026Q4
 res_l_gdp_ea_gap,2027Q1
 res_l_gdp_ea_gap,2027Q2
@@ -17,6 +21,10 @@ res_l_gdp_ea_gap,2028Q1
 res_l_gdp_ea_gap,2028Q2
 res_l_gdp_ea_gap,2028Q3
 res_l_gdp_ea_gap,2028Q4
+res_l_gdp_ea_gap,2029Q1
+res_l_gdp_ea_gap,2029Q2
+res_l_gdp_ea_gap,2029Q3
+res_l_gdp_ea_gap,2029Q4
 res_dl_cpi_ea,2026Q4
 res_dl_cpi_ea,2027Q1
 res_dl_cpi_ea,2027Q2
@@ -26,6 +34,10 @@ res_dl_cpi_ea,2028Q1
 res_dl_cpi_ea,2028Q2
 res_dl_cpi_ea,2028Q3
 res_dl_cpi_ea,2028Q4
+res_dl_cpi_ea,2029Q1
+res_dl_cpi_ea,2029Q2
+res_dl_cpi_ea,2029Q3
+res_dl_cpi_ea,2029Q4
 res_dl_roil,2026Q4
 res_dl_roil,2027Q1
 res_dl_roil,2027Q2
@@ -35,6 +47,10 @@ res_dl_roil,2028Q1
 res_dl_roil,2028Q2
 res_dl_roil,2028Q3
 res_dl_roil,2028Q4
+res_dl_roil,2029Q1
+res_dl_roil,2029Q2
+res_dl_roil,2029Q3
+res_dl_roil,2029Q4
 res_dl_er_tar,2026Q4
 res_dl_er_tar,2027Q1
 res_dl_er_tar,2027Q2

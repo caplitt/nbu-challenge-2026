@@ -96,6 +96,43 @@ def with_rate_path(plan: Plan, path: dict | None) -> Plan:
     return plan
 
 
+def policy_plan(ctx, plan: Plan, decision: dict, look_through_loss: bool = False) -> Plan:
+    """The decision (and promised hold) on the first quarters, then the rate path that brings inflation back to the
+    point target within the policy horizon (cfg.TARGET_PATH) — the way the NBU builds its baseline, instead of a
+    mechanical Taylor rule. With look_through_loss the path is chosen ignoring first-round judgments."""
+    from .optimal import optimal_path   # optimal imports this module
+    cfg = ctx["cfg"]
+    lt = base_plan(ctx, look_through=True) if look_through_loss else plan
+    _, path, _ = optimal_path(ctx, lt, fixed=decision, **cfg.TARGET_PATH)
+    return with_rate_path(plan, {str(p): float(v) for p, v in path.items()})
+
+
+def scenario_plans(ctx) -> dict:
+    """Baseline (recommended decision + target-consistent path) and the risk scenarios built on top of it.
+    In scenarios only the October decision stays fixed; afterwards the rule reacts to the scenario shocks
+    around the baseline path."""
+    cfg = ctx["cfg"]
+    f = ctx["rngfcast"][0]
+    base_rec = policy_plan(ctx, base_plan(ctx), cfg.RECOMMENDED_RATE_PATH)
+    around = rate_path_to_shock(ctx, nowcast_to_shock(ctx, base_rec), keep=[str(f)])
+    return {name: base_rec if name == "Базовий" else fn(around.copy(), f, ctx) for name, fn in cfg.SCENARIOS.items()}
+
+
+def rate_path_to_shock(ctx, plan: Plan, keep: list[str]) -> Plan:
+    """Turn a fixed rate path (except `keep` quarters) into the Taylor-rule shocks it implies: the baseline stays the
+    same, but in scenarios the rule can react to new shocks around the baseline path."""
+    keep = {pd.Period(k, "Q") for k in keep}
+    implied = run(ctx, plan).attrs["shocks"]
+    out = plan.copy()
+    for per in [p for p in out.exo.get("ir_pol", {}) if p not in keep]:
+        out.exo["ir_pol"].pop(per)
+        out.endo["res_ir_tlr"].discard(per)
+        out.shocks.setdefault("res_ir_tlr", {})[per] = float(implied.loc[per, "res_ir_tlr"])  # total, not added
+    out.exo = {k: v for k, v in out.exo.items() if v}
+    out.endo = {k: v for k, v in out.endo.items() if v}
+    return out
+
+
 def nowcast_to_shock(ctx, plan: Plan) -> Plan:
     """Replace the CPI nowcast condition by the cost-push shock it implies in this plan, so that scenario
     shocks (oil, exchange rate, ...) can move CPI in the nowcast quarters instead of being absorbed."""
@@ -149,7 +186,7 @@ def summary_table(results: dict[str, pd.DataFrame], periods) -> pd.DataFrame:
     return t.round(2)
 
 
-def annual_table(df: pd.DataFrame, years=(2025, 2026, 2027, 2028)) -> pd.DataFrame:
+def annual_table(df: pd.DataFrame, years=(2025, 2026, 2027, 2028, 2029)) -> pd.DataFrame:
     """Annual view comparable with NBU tables: CPI y/y in Q4, GDP growth (annual average), rate & FX in Q4."""
     out = {}
     for y in years:
