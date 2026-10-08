@@ -83,7 +83,22 @@ def activity():
                  labels=[ROMAN_Q[p.quarter] + "\n" + str(p.year)[2:] for p in b.loc["2024Q1":].index])
     pl.monthly_panel(ax[2], {"Номінальна": w["Номінальна"], "Реальна": w["Реальна"]}, "Середня зарплата", "% р/р",
                      start=START)
-    pl.save(fig, FIG / "ov_activity.png", "Держстат, НБУ (Інфляційний звіт, липень 2026)")
+    # Derzhstat did not publish wages for some months under martial law (e.g. Apr–Dec 2024);
+    # the NBU fills them with its own estimate — shown dashed, joined to the official points at both ends
+    for i, col in enumerate(("Номінальна (оцінка)", "Реальна (оцінка)")):
+        est = w[col].loc[START:]
+        valid = est.dropna()
+        if not valid.empty:
+            full = est.reindex(pd.period_range(valid.index.min(), valid.index.max(), freq="M"))
+            ax[2].plot(full.index.to_timestamp(), full.values, color=pl.SERIES[i], ls=(0, (3, 2)), lw=1.6)
+    from matplotlib.lines import Line2D
+    h, lab = ax[2].get_legend_handles_labels()
+    h.append(Line2D([], [], color=pl.INK["secondary"], ls=(0, (3, 2)), lw=1.6))
+    lab.append("Оцінка НБУ (без даних Держстату)")
+    ax[2].set_ylim(top=40)   # room for the legend above the lines
+    ax[2].legend(h, lab, loc="upper right", fontsize=8)
+    pl.save(fig, FIG / "ov_activity.png", "Держстат, НБУ (Інфляційний звіт, липень 2026); пунктир — оцінка НБУ "
+            "для місяців без даних Держстату")
 
 
 def fiscal():
