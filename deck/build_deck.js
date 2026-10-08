@@ -99,13 +99,35 @@ function numberedRow(slide, items, x, y, w, h) {
       isTextBox: true, objectName: `point${i + 1}` });
   });
 }
+// a cell / source is a string, a {text, url} link, or a list of them (runs); links become clickable hyperlinks
+function runs(c) {
+  const one = (r) => (r && typeof r === "object")
+    ? (r.url ? { text: r.text, options: { hyperlink: { url: r.url, tooltip: r.url } } } : { text: r.text })
+    : { text: String(r) };
+  return Array.isArray(c) ? c.map(one) : (c && typeof c === "object") ? [one(c)] : String(c);
+}
+function plain(c) {
+  return Array.isArray(c) ? c.map(plain).join("") : (c && typeof c === "object") ? c.text : String(c);
+}
+function sourcesLine(slide, sources) {
+  if (!sources || !sources.length) return;
+  const items = [{ text: "Джерела: " }];
+  sources.forEach((s, i) => { if (i) items.push({ text: " · " }); items.push(s); });
+  slide.addText(runs(items), { x: 5.4, y: H - 0.44, w: W - M - 0.75 - 5.4, h: 0.32, fontSize: 9, color: HEX.muted,
+    valign: "middle", margin: 0, isTextBox: true, objectName: "sources" });
+}
 function table(slide, t, x, y, w, opts = {}) {
   const fs_ = t.font || opts.font || 12;
   const header = t.header.map((h) => ({ text: h, options: { bold: true, color: C.background1, fill: { color: HEX.teal },
     fontSize: fs_, valign: "middle" } }));
-  const rows = t.rows.map((r, ri) => r.map((c, ci) => ({ text: String(c), options: {
-    fontSize: fs_, color: C.text1, fill: { color: ri % 2 ? HEX.tint : "FFFFFF" }, bold: ci === 0 || String(c).includes("★"),
-    align: ci === 0 ? "left" : (opts.leftAll ? "left" : "center"), valign: "middle" } })));
+  const rows = t.rows.map((r, ri) => r.map((c, ci) => {
+    const align = ci === 0 ? "left" : (opts.leftAll ? "left" : "center");
+    // every run needs the cell's align: pptxgenjs starts a new paragraph when align differs between runs
+    const txt = runs(c);
+    const text = Array.isArray(txt) ? txt.map((x) => ({ text: x.text, options: { ...(x.options || {}), align } })) : txt;
+    return { text, options: { fontSize: fs_, color: C.text1, fill: { color: ri % 2 ? HEX.tint : "FFFFFF" },
+      bold: ci === 0 || plain(c).includes("★"), align, valign: "middle" } };
+  }));
   const colW = t.colw || (() => { const first = opts.firstCol || Math.min(3.2, w * 0.32);
     const rest = (w - first) / (t.header.length - 1); return [first, ...Array(t.header.length - 1).fill(rest)]; })();
   const rh = t.rowH || opts.rowH;
@@ -118,6 +140,7 @@ function newSlide(s) {
   const slide = pres.addSlide({ masterName: master, sectionTitle: s.section || "Вступ" });
   slide.addText(s.title, { placeholder: "title" });
   if (s.notes) slide.addNotes(s.notes);
+  sourcesLine(slide, s.sources);
   return slide;
 }
 const TOP = 1.45, BOTTOM = H - 0.6;

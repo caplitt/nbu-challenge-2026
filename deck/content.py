@@ -58,6 +58,9 @@ VS = K["vs_nbu"]
 _qs = list(Q)
 first_target_q = next(q for i, q in enumerate(_qs) if all(abs(Q[r]["d4l_cpi"] - 5) <= 0.1 for r in _qs[i:]))
 dip28 = min(Q[f"2028Q{i}"]["d4l_cpi"] for i in range(1, 5))
+# actual (model) depreciation of UAH vs EUR, average % a year over the horizon: the NBU target path allows up to
+# 4% a year, but the high policy rate (UIP) keeps the hryvnia stronger
+fx_yr = ((Q[f"{_qs[-1]}"]["uah_eur"] / Q[_qs[0]]["uah_eur"]) ** (4 / (len(_qs) - 1)) - 1) * 100
 roman = {"1": "I", "2": "II", "3": "III", "4": "IV"}
 
 
@@ -104,6 +107,32 @@ def half(x):
     return round(x * 2) / 2
 
 
+# Sources actually used (files and pages the data and facts were taken from) — clickable in the deck
+SRC = {k: {"text": t, "url": u} for k, (t, u) in {
+    "ir": ("НБУ, Інфляційний звіт (липень 2026)", "https://bank.gov.ua/ua/news/all/inflyatsiya-prishvidshitsya-u-drugomu-pivrichchi-ale-povernetsya-do-znijennya-nastupnogo-roku--inflyatsiyniy-zvit"),
+    "ir_data": ("дані графіків ІЗ", "https://bank.gov.ua/admin_uploads/article/Tables_Charts_2026-Q3.xlsx?v=19"),
+    "nbu_fc": ("макропрогноз НБУ", "https://bank.gov.ua/admin_uploads/article/Macroeconomic_Forecast_table_2026_07.xlsx?v=19"),
+    "api": ("API НБУ", "https://bank.gov.ua/ua/open-data/api-dev"),
+    "ccpi": ("базовий ІСЦ (НБУ)", "https://bank.gov.ua/files/macro/CCPI_m.xlsx"),
+    "cpi_aug": ("коментар НБУ: інфляція в серпні", "https://bank.gov.ua/ua/news/all/komentar-natsionalnogo-banku-schodo-rivnya-inflyatsiyi-v-serpni-2026-roku"),
+    "gdp_q2": ("коментар НБУ: ВВП II кв.", "https://bank.gov.ua/ua/news/all/komentar-natsionalnogo-banku-schodo-zmini-realnogo-vvp-u-ii-kvartali-2026-roku"),
+    "kmp": ("підсумки дискусії КМП", "https://bank.gov.ua/ua/news/all/pidsumki-diskusiyi-chleniv-komitetu-z-monetarnoyi-politiki-natsionalnogo-banku-schodo-rivnya-oblikovoyi-stavki-16-veresnya-2026-roku"),
+    "rate": ("рішення НБУ 17.09.2026", "https://bank.gov.ua/ua/news/all/natsionalniy-bank-ukrayini-pidvischiv-oblikovu-stavku-do-16"),
+    "fx_pack": ("пакет пом'якшення валютних обмежень", "https://bank.gov.ua/ua/news/all/nbu-vprovadjuye-paket-pomyakshennya-valyutnih-obmejen-z-osnovnim-fokusom-na-pidtrimtsi-naselennya"),
+    "fx_strat": ("Стратегія пом'якшення валютних обмежень", "https://bank.gov.ua/admin_uploads/article/Strategy_for_easing_FX_restrictions_07-07-2023.pdf?v=19"),
+    "mpg": ("Основні засади ГКП (2024)", "https://p4.bank.gov.ua/admin_uploads/article/MPG_2024-mt_eng.pdf"),
+    "imf": ("Рада МВФ: перегляд програми", "https://bank.gov.ua/ua/news/all/rada-mvf-shvalila-pershiy-pereglyad-programi-rozshirenogo-finansuvannya-ta-zatverdila-vidilennya-transhu-obsyagom-690-mln-dol-ssha"),
+    "budget": ("бюджет (НБУ)", "https://bank.gov.ua/files/macro/S_budget_m.xlsx"),
+    "wages": ("зарплати (НБУ)", "https://bank.gov.ua/files/macro/Wages_m.xlsx"),
+    "ecb_proj": ("прогноз ЄЦБ (вересень 2026)", "https://www.ecb.europa.eu/press/projections/html/index.en.html"),
+    "ecb": ("ЄЦБ Data Portal", "https://data.ecb.europa.eu/"),
+    "eurostat": ("Eurostat HICP", "https://ec.europa.eu/eurostat/databrowser/view/prc_hicp_minr/default/table"),
+    "eia": ("EIA Brent", "https://db.nomics.world/EIA/PET/RBRTE.M"),
+    "fut": ("ф'ючерси Brent", "https://finance.yahoo.com/quote/BZ%3DF/"),
+    "template": ("модель-шаблон НБУ", "https://events.bank.gov.ua/uchallenge2026/files/nbu_challenge_model_2026.zip"),
+    "derzh": ("Держстат", "https://stat.gov.ua/"),
+}.items()}
+
 opt_lt = K["optimal_paths"]["λ = 1, без реакції на адмінціни"]
 core = {y: A[y]["Базова інфляція, % р/р (IV кв.)"] for y in ("2026", "2027", "2028", "2029")}
 nbu_cpi27 = nbu_val("ІСЦ (на кінець", "2027Q4")
@@ -128,8 +157,9 @@ add(type="summary", section=None, title="Головне: помірне поси
     cards=[
         {"label": "Облікова ставка", "value": f"{n(REC['rate'])}%", "delta": f"{n(REC['change_pp'], 1, True)} в. п.",
          "text": f"утримувати щонайменше до середини 2027; далі — зниження, що повертає інфляцію до 5% у {first_target_q[:4]}"},
-        {"label": "Курс гривні до євро", "value": "≈4%", "delta": "у 2027",
-         "text": "поступове послаблення, керована гнучкість: курс амортизує шоки, інтервенції лише згладжують коливання"},
+        {"label": "Курс гривні до євро", "value": "до 4%", "delta": "на рік",
+         "text": f"допускати поступове послаблення; за ставки {n(REC['rate'])}% фактичне — ≈{n(fx_yr, 0)}% на рік; "
+                 "інтервенції лише згладжують коливання"},
         {"label": "Валютні обмеження", "value": "Пауза", "delta": "етап III",
          "text": "серпневий пакет зберегти; нові кроки — після відновлення резервів і допомоги"},
     ],
@@ -239,17 +269,20 @@ add(type="chart", section="Прогноз",
           "Вагу 0,016 відкалібровано так, щоб +20% ціни нафти давали ≈+0,3 в. п. до ІСЦ: пальне ≈4% кошика, "
           "частка нафти в його ціні ≈40%, плюс непрямі ефекти. Графік побудовано в MATLAB/IRIS.")
 
-judg_rows = [["Інфляція IV кв. 2026", f"Наукаст: тренд 0,65%/міс + сезонність − 0,1 в. п. (продовольство) → грудень {n(K['nowcast_dec_yoy'])}% р/р", "Держстат, НБУ"],
-             ["ВВП III кв. 2026", "−0,3% кв/кв SA (КМП: «суттєво гірше прогнозу»)", "Підсумки КМП 28.09"]]
+judg_rows = [["Інфляція IV кв. 2026", f"Наукаст: тренд 0,65%/міс + сезонність − 0,1 в. п. (продовольство) → грудень {n(K['nowcast_dec_yoy'])}% р/р",
+              {"text": "Держстат, API НБУ", "url": SRC["api"]["url"]}],
+             ["ВВП III кв. 2026", "−0,3% кв/кв SA (КМП: «суттєво гірше прогнозу»)", {"text": "Підсумки КМП 28.09", "url": SRC["kmp"]["url"]}]]
 for j in cfg.JUDGMENTS:
     label = {"res_dl_cpi_c": "Шок витрат 2027", "res_dl_rnc": "Адмінціни та акцизи", "res_l_gdp_gap": "Бюджетний імпульс",
              "res_prem_uip_gap": "Премія за ризик", "res_dl_gdp_tnd": "Потенційний ВВП"}[j["shock"]]
     why = j["why"].split(" (")[0]
     why = why[len(label) + 2:] if why.startswith(label + ":") else why
-    judg_rows.append([label, why[0].upper() + why[1:], j["source"].split(";")[0]])
-judg_rows.append(["Курс гривні до €", "Поступове послаблення ≈4% (2027) і 3% (2028): EUR/USD за НБУ + керована гнучкість", "Припущення НБУ"])
-judg_rows.append(["Нафта Brent", "Ф'ючерсна крива: $101 (IV кв. 2026) → $83 (кінець 2027) → $76 (кінець 2028)", "EIA, NYMEX"])
-judg_rows.append(["Єврозона", "HICP 3,0 / 2,5 / 2,1%, ВВП 0,9 / 1,4 / 1,5%, ставка ЄЦБ до 3%", "ЄЦБ, вер. 2026"])
+    judg_rows.append([label, why[0].upper() + why[1:], {"text": j["source"].split(";")[0].split(" (")[0], "url": j["url"]}])
+judg_rows.append(["Курс гривні до €", f"Допустиме послаблення (цільовий темп): 4% у 2027, 3% у 2028; фактичний курс — з моделі (≈{n(fx_yr, 0)}% на рік)",
+                  {"text": "Макропрогноз НБУ (EUR/USD)", "url": SRC["nbu_fc"]["url"]}])
+judg_rows.append(["Нафта Brent", "Ф'ючерсна крива: $101 (IV кв. 2026) → $83 (кінець 2027) → $76 (кінець 2028)",
+                  [SRC["eia"], {"text": ", "}, {"text": "NYMEX", "url": SRC["fut"]["url"]}]])
+judg_rows.append(["Єврозона", "HICP 3,0 / 2,5 / 2,1%, ВВП 0,9 / 1,4 / 1,5%, ставка ЄЦБ до 3%", {"text": "ЄЦБ, вер. 2026", "url": SRC["ecb_proj"]["url"]}])
 add(type="table", section="Прогноз", title="Припущення та судження базового сценарію — кожне з джерелом",
     table={"header": ["Чинник", "Що закладено", "Джерело"], "rows": judg_rows, "colw": [2.4, 7.5, 2.43], "font": 12, "rowH": 0.44},
     notes="Модель має лише кілька основних рівнянь, тому все, чого в ній немає — енергетика, бюджет, допомога, "
@@ -396,7 +429,8 @@ add(type="chart", section="Рекомендації",
     bullets=[f"Продаж НБУ ≈${n(RR['sales_per_month'])} млрд/міс, надходження ≈${n(RR['inflows_per_month'])} млрд/міс (липень–вересень)",
              f"Кінець 2026: ${n(RES['Надолуження допомоги'], 0)} / {n(RES['Як у липні–вересні'], 0)} / {n(RES['Затримка допомоги'], 0)} млрд "
              f"= {n(RESM['Надолуження допомоги'])} / {n(RESM['Як у липні–вересні'])} / {n(RESM['Затримка допомоги'])} міс. імпорту",
-             "Рекомендація: керована гнучкість — поступове послаблення гривні до € ≈4% у 2027, інтервенції лише для згладжування",
+             f"Рекомендація: керована гнучкість — допускати послаблення гривні до € до ≈4% на рік (за ставки {n(REC['rate'])}% "
+             f"фактичне — ≈{n(fx_yr, 0)}%), інтервенції лише для згладжування",
              "Курс не фіксувати й не захищати рівень: це прямий шлях до втрати резервів"],
     notes="Простий балансовий розрахунок: резерви = попередні + офіційні надходження − продаж валюти НБУ. "
           "Регресія інтервенцій на модельну змінну не дала значущого зв'язку, тому ми не використовували підхід «1% курсу = X млрд».")
@@ -481,15 +515,17 @@ add(type="table", section="Додатки", title=f"Додаток {5 if ML else
           "траєкторія повернення до цілі). Усі квартали — results/tables/baseline_quarterly.csv.")
 add(type="table", section="Додатки", title=f"Додаток {6 if ML else 5}. Джерела даних",
     table={"header": ["Дані", "Джерело"], "colw": [3.6, 8.7], "font": 13, "rowH": 0.48, "rows": [
-        ["ІСЦ, базова інфляція, складові", "Держстат через API НБУ; Інфляційний звіт НБУ (липень 2026); коментарі НБУ"],
-        ["Облікова ставка, курси, інтервенції, резерви", "API НБУ (statdirectory/key, exchange, kursf, res)"],
-        ["Реальний ВВП", "Держстат (сезонно скоригований), коментар НБУ 17.09.2026"],
-        ["Прогноз і припущення НБУ", "Інфляційний звіт і таблиця макропрогнозу, липень 2026"],
-        ["Єврозона", "Eurostat (HICP, prc_hicp_minr), ЄЦБ (ВВП EA21, депозитна ставка), прогноз ЄЦБ вересень 2026"],
-        ["Нафта Brent", "EIA (через DBnomics), ф'ючерси NYMEX BZ (Yahoo Finance); курс USD/EUR — ЄЦБ"],
-        ["Рішення та дискусія КМП", "Пресреліз 17.09.2026, підсумки дискусії КМП 28.09.2026"],
-        ["Валютні обмеження", "Стратегія НБУ (2023), пакет пом'якшення 10.08.2026"],
-        ["Модель", "Шаблон QPM NBU University Challenge 2026 + розширення команди; Python і MATLAB R2026b + IRIS"]]},
+        ["ІСЦ, базова інфляція, складові", [SRC["api"], {"text": " (Держстат); "}, SRC["ccpi"], {"text": "; "}, SRC["ir_data"],
+                                            {"text": "; "}, SRC["cpi_aug"]]],
+        ["Облікова ставка, курси, інтервенції, резерви", [SRC["api"], {"text": " (statdirectory/key, exchange, kursf, res)"}]],
+        ["Реальний ВВП, зарплати, бюджет", [SRC["derzh"], {"text": "; "}, SRC["gdp_q2"], {"text": "; "}, SRC["wages"], {"text": "; "}, SRC["budget"]]],
+        ["Прогноз і припущення НБУ", [SRC["ir"], {"text": "; "}, SRC["nbu_fc"], {"text": "; "}, SRC["ir_data"]]],
+        ["Ціль і горизонт політики", [SRC["mpg"]]],
+        ["Єврозона", [SRC["eurostat"], {"text": "; "}, SRC["ecb"], {"text": "; "}, SRC["ecb_proj"]]],
+        ["Нафта Brent", [SRC["eia"], {"text": " (DBnomics); "}, SRC["fut"], {"text": " (NYMEX BZ)"}]],
+        ["Рішення та дискусія КМП", [SRC["rate"], {"text": "; "}, SRC["kmp"]]],
+        ["Валютні обмеження, МВФ", [SRC["fx_strat"], {"text": "; "}, SRC["fx_pack"], {"text": "; "}, SRC["imf"]]],
+        ["Модель", [SRC["template"], {"text": " + розширення команди; Python і MATLAB R2026b + IRIS"}]]]},
     notes="Усі дані завантажуються скриптами; дата відсічення — 07.10.2026.")
 
 # ----------------------------------------------------------------------------------------------- speech (15 min)
@@ -509,8 +545,9 @@ SPEECH = {
         "Почнемо з головного. Ми пропонуємо три рішення, які працюють як єдиний пакет. "
         f"Перше — підвищити облікову ставку на 0,5 пункта, до {n(REC['rate'])}%, і утримувати її щонайменше до "
         f"середини 2027 року. Інфляція знову прискорюється: у грудні вона сягне майже {dec0}%, а ризики "
-        "зміщені вгору. Друге — керована гнучкість курсу: дозволити гривні поступово послаблюватися до євро, "
-        "приблизно на 4% у 2027 році, замість того щоб витрачати близько 5 мільярдів доларів резервів щомісяця. "
+        "зміщені вгору. Друге — керована гнучкість курсу: допускати поступове послаблення гривні до євро, до 4% на "
+        "рік, замість того щоб витрачати близько 5 мільярдів доларів резервів щомісяця; за вищої ставки фактичне "
+        f"послаблення буде помірним — близько {n(fx_yr, 0)}% на рік. "
         "Третє — поставити на паузу наступні кроки валютної лібералізації, доки не відновляться резерви і ритм "
         f"допомоги. За такої політики інфляція знизиться до {q27}% наприкінці 2027 року і повернеться до цілі 5% у "
         f"{tq} — у межах трирічного горизонту політики НБУ. Далі — як ми дійшли до цих висновків.",
@@ -620,9 +657,11 @@ SPEECH = {
         f"Друга рекомендація — щодо курсу. НБУ продає близько {n(RR['sales_per_month'])} мільярда доларів на місяць, "
         f"а надходить близько {n(RR['inflows_per_month'])}. Якщо так триватиме, наприкінці року резерви становитимуть "
         f"{n(RES['Як у липні–вересні'], 0)} мільярди — {n(RESM['Як у липні–вересні'])} місяця імпорту, а за затримки "
-        f"допомоги — {n(RES['Затримка допомоги'], 0)} мільярдів. Тому ми пропонуємо керовану гнучкість: дозволити "
-        "гривні поступово послаблюватися — приблизно на 4% до євро у 2027 році, — а інтервенції використовувати "
-        "лише для згладжування коливань. Захищати певний рівень курсу — прямий шлях до втрати резервів.",
+        f"допомоги — {n(RES['Затримка допомоги'], 0)} мільярдів. Тому ми пропонуємо керовану гнучкість: допускати "
+        "поступове послаблення гривні — до 4% на рік до євро, — а інтервенції використовувати лише для згладжування "
+        f"коливань. За ставки {n(REC['rate'])}% модель показує фактичне послаблення лише близько {n(fx_yr, 0)}% на рік: "
+        "висока ставка підтримує гривню без витрачання резервів. Захищати певний рівень курсу — прямий шлях до втрати "
+        "резервів.",
     "Валютні обмеження":
         "Третя рекомендація — валютні обмеження. Серпневий пакет варто зберегти: після підвищення ліміту купівля "
         f"валюти населенням зросла з {n(hh_jul, 2)} до {n(hh_sep, 2)} мільярда доларів на місяць — помітно, але "
@@ -675,6 +714,39 @@ for i, sl in talk:
 md += [f"**Кінець: {int(t // 60)}:{int(t % 60):02d}**", ""]
 (ROOT / "docs" / "speech.md").write_text("\n".join(md), encoding="utf-8")
 print(f"docs/speech.md: {total} {words} ≈ {mins} хв")
+
+# Clickable sources at the bottom of each slide (title fragment -> keys of SRC)
+SOURCES = {
+    "Головне:": ["mpg", "ir"],
+    "Зовнішнє середовище": ["ecb_proj", "eurostat", "eia", "fut"],
+    "Інфляція прискорилася": ["cpi_aug", "ir_data", "api"],
+    "Очікування підвищені": ["ir_data", "api", "kmp"],
+    "Економіка сповільнюється": ["gdp_q2", "ir_data", "kmp"],
+    "НБУ продає": ["api", "rate"],
+    "Бюджет залежить": ["nbu_fc", "imf"],
+    "Модель:": ["template", "api", "ecb", "eurostat"],
+    "Наше розширення QPM": ["ccpi", "eia", "fut"],
+    "Припущення та судження": ["ir", "nbu_fc", "kmp"],
+    "Короткостроковий прогноз": ["api", "cpi_aug"],
+    "Інфляція досягне піку": ["mpg", "nbu_fc"],
+    "Базова інфляція в 2027": ["ccpi", "nbu_fc"],
+    "слабший попит": ["ir_data", "nbu_fc", "gdp_q2"],
+    "Ставка має лишатися високою": ["template"],
+    "Сценарії:": ["kmp", "fut", "nbu_fc"],
+    "Матриця ризиків": ["kmp", "ir"],
+    "Варіанти рішення": ["mpg"],
+    "Облікова ставка: підвищити": ["rate", "kmp"],
+    "Курс і резерви": ["api", "imf"],
+    "Валютні обмеження": ["fx_pack", "fx_strat", "api"],
+    "Комунікація": ["rate"],
+    "Додаток 1.": ["template"],
+    "Додаток 2.": ["template"],
+    "Бектест": ["api"],
+}
+for sl in slides:
+    keys = [k for k in SOURCES if k in sl.get("title", "")]
+    if keys:
+        sl["sources"] = [SRC[s] for s in SOURCES[keys[0]]]
 
 for sl in slides:
     if sl["type"] == "matrix":
