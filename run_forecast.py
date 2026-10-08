@@ -150,6 +150,10 @@ def main():
         "reserves_months_imports_end2026": (resv.iloc[-1] / reserves.IMPORTS_PER_MONTH).round(1).to_dict(),
         "reserves_recent": {"sales_per_month": round(resv.attrs["sales"], 3),
                             "inflows_per_month": round(resv.attrs["recent_inflows"], 3)},
+        "reserves_nbu": {"end2026": reserves.NBU_RESERVES_END2026,
+                         "months": round(reserves.NBU_RESERVES_END2026 / reserves.IMPORTS_PER_MONTH, 1),
+                         "inflow_needed_per_month": round((reserves.NBU_RESERVES_END2026 - resv.iloc[0, 0]) / (len(resv) - 1)
+                                                          + resv.attrs["sales"], 1)},
         "backtest_rmse": bt_err.reset_index().rename(columns={"level_0": "origin", "level_1": "var"}).to_dict(orient="records"),
         "vs_nbu": comp.to_dict(),
         "sigma": sigma.round(2).to_dict(),
@@ -251,8 +255,10 @@ def main():
     series = {"Факт": hist_r}
     series.update({k: resv[k] for k in resv.columns})
     pl.monthly_panel(axr[0], series, "Міжнародні резерви: сценарії надходжень у IV кв. 2026", "$ млрд")
-    axr[0].legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=4, fontsize=8)
-    fig.subplots_adjust(bottom=0.25)
+    axr[0].scatter([pd.Period("2026-12", "M").to_timestamp()], [reserves.NBU_RESERVES_END2026], marker="D", s=36,
+                   color=pl.SERIES[6], zorder=6, label="Прогноз НБУ (липень)")
+    axr[0].legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=3, fontsize=8)
+    fig.subplots_adjust(bottom=0.29)
     axr[0].axhline(3 * reserves.IMPORTS_PER_MONTH, color=pl.SERIES[7], lw=1)
     axr[0].annotate("3 місяці імпорту", xy=(0.01, 3 * reserves.IMPORTS_PER_MONTH), xycoords=("axes fraction", "data"),
                     xytext=(0, 3), textcoords="offset points", fontsize=8, color=pl.INK["secondary"])

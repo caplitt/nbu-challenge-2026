@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| Презентація | [`presentation/NBU_University_Challenge_2026.pptx`](presentation/NBU_University_Challenge_2026.pptx) (+ `.pdf`) — 34 слайди з нотатками доповідача |
+| Презентація | [`presentation/NBU_University_Challenge_2026.pptx`](presentation/NBU_University_Challenge_2026.pptx) (+ `.pdf`) — 36 слайдів з нотатками доповідача |
 | Підсумки прогнозу | [`docs/forecast_summary.md`](docs/forecast_summary.md) |
 | Припущення і судження | [`docs/assumptions.md`](docs/assumptions.md) |
 | Обсяг роботи: дані, зміни моделі, судження, перевірки (з посиланнями) | [`docs/scope_of_work.md`](docs/scope_of_work.md) (+ Word: `docs/scope_of_work.docx`) |
@@ -23,13 +23,17 @@
 
 ## Швидкий старт
 
+Потрібно: Python 3.11+ і Node.js 18+. Для експорту PDF — PowerPoint (Windows); MATLAB R2026b + IRIS — за бажанням (без них збірка бере збережені результати або Python-графіки).
+
 ```bash
+git clone https://github.com/caplitt/nbu-challenge-2026.git
+cd nbu-challenge-2026
 python -m pip install -r requirements.txt
 cd deck && npm install && cd ..
 python build.py --fetch      # дані → графіки → прогноз → MATLAB/IRIS → звірка → документи → презентація → PDF → тести
 ```
 
-`python build.py` без `--fetch` перебудовує все з уже завантажених даних. PDF експортується через встановлений PowerPoint (`deck/export.ps1`).
+`python build.py` без `--fetch` перебудовує все з уже завантажених даних. PDF експортується через встановлений PowerPoint (`deck/export.ps1`); без PowerPoint — `python build.py --no-pdf`.
 
 **MATLAB.** Якщо встановлено MATLAB і IRIS (шляхи за замовчуванням — `C:/Program Files/MATLAB/R2026b/bin/matlab.exe` і `~/Documents/MATLAB/IRIS-Toolbox-Release-20230622`, або змінні середовища `MATLAB_EXE`, `IRIS_PATH`), `build.py` сам запускає `matlab/run_check.m`. Без MATLAB (`--no-matlab` або після завершення пробної ліцензії) збірка працює далі: якщо збережені результати MATLAB уже не відповідають Python, презентація автоматично бере Python-графіки (`results/matlab_status.json`).
 

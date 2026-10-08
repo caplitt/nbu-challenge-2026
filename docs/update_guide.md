@@ -31,7 +31,9 @@
 | Короткостроковий прогноз ІСЦ | `config.py` → `CPI_NOWCAST` (поправка `adjustment`) |
 | Параметри моделі (β, ціль тощо) | `model/params.yaml` |
 | Рівняння | `model/model.model` |
-| Тексти слайдів | `deck/content.py` |
+| Тексти слайдів і текст виступу (`SPEECH`) | `deck/content.py` |
+| Відповіді журі (цифри підставляються з моделі) | `docs/templates/qa_prep.md` → генерується `docs/qa_prep.md` |
+| Документ «Обсяг роботи» (ручний; Word генерується з нього) | `docs/scope_of_work.md` |
 | Назва команди, університет | `deck/content.py` → `TEAM` |
 | Вигляд слайдів | `deck/build_deck.js` |
 

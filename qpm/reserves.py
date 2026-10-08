@@ -11,7 +11,10 @@ import pandas as pd
 
 from . import overview
 
-IMPORTS_PER_MONTH = 145.1 / 12   # imports of goods & services 2026, NBU forecast (July 2026), $ bn per month
+# Months of imports as the NBU counts them: reserves at the end of 2026 vs imports of the NEXT year
+# ("місяців імпорту майбутнього періоду"): 2027 imports of goods & services, NBU forecast (July 2026), $ bn per month
+IMPORTS_PER_MONTH = 134.5 / 12
+NBU_RESERVES_END2026 = 69.7     # NBU July 2026 forecast, $ bn (6.2 months of next-year imports)
 
 
 def implied_inflows(window=3) -> pd.DataFrame:

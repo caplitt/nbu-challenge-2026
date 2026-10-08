@@ -1,9 +1,11 @@
-"""Генерує docs/assumptions.md і docs/forecast_summary.md з config.py та results/ (цифри завжди актуальні).
+"""Генерує docs/assumptions.md, docs/forecast_summary.md і docs/qa_prep.md (з шаблону docs/templates/qa_prep.md)
+з config.py та results/ — цифри завжди актуальні.
 
 Запуск:  python make_docs.py
 """
 import json
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -17,7 +19,10 @@ DOCS = ROOT / "docs"
 
 
 def n(x, d=1):
-    return f"{x:.{d}f}".replace(".", ",").replace("-", "−")
+    """Decimal comma, half-up rounding (as on the slides)."""
+    q = Decimal(str(float(x))).quantize(Decimal(1).scaleb(-d), rounding=ROUND_HALF_UP)
+    q = abs(q) if q == 0 else q   # no "−0,0"
+    return f"{q:f}".replace(".", ",").replace("-", "−")
 
 
 def md_table(df: pd.DataFrame, fmt=lambda v: n(v) if isinstance(v, float) else str(v)) -> str:
@@ -99,8 +104,78 @@ def summary():
     (DOCS / "forecast_summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
+def qa():
+    """Q&A for the jury: the template's model numbers are filled from the latest results."""
+    from qpm.nbu_files import read_ir_chart, read_nbu_forecast
+    Q, A, SC, PO, OP = (K[k] for k in ("baseline_quarterly", "baseline_annual", "scenarios", "policy_options", "optimal_paths"))
+    rec = cfg.RECOMMENDATION["option"]
+    base = pd.read_csv(TAB / "forecast_Базовий.csv", index_col=0, encoding="utf-8-sig")
+    nbu = read_nbu_forecast()
+
+    def nbu_v(ind, per):
+        return float(nbu[nbu["indicator"].str.startswith(ind) & (nbu["period"] == per)]["value"].iloc[0])
+
+    def half(x):
+        return round(x * 2) / 2
+
+    qs = list(Q)
+    target_q = next(q for i, q in enumerate(qs) if all(abs(Q[r]["d4l_cpi"] - 5) <= 0.1 for r in qs[i:]))
+    roman = {"1": "I", "2": "II", "3": "III", "4": "IV"}
+    q28 = [Q[f"2028Q{i}"]["d4l_cpi"] for i in range(1, 5)]
+    dip = sorted({n(min(q28)), n(Q["2028Q4"]["d4l_cpi"])}, key=lambda t: float(t.replace(",", ".").replace("−", "-")))
+    bt = pd.read_csv(TAB / "backtest_errors.csv", index_col=[0, 1], encoding="utf-8-sig")
+    bt.columns = ["model", "naive"]
+    bt = bt[[i[1].startswith("ІСЦ") for i in bt.index]]
+    nc = pd.read_csv(TAB / "cpi_nowcast.csv", index_col=0, encoding="utf-8-sig")
+    months = {"01": "січень", "02": "лютий", "03": "березень", "04": "квітень", "05": "травень", "06": "червень",
+              "07": "липень", "08": "серпень", "09": "вересень", "10": "жовтень", "11": "листопад", "12": "грудень"}
+    hh = pd.read_csv(ROOT / "data" / "overview" / "fx_market_households.csv", index_col=0, encoding="utf-8-sig")
+    hh_jul, hh_sep = float(hh.loc["2026-07", "CliBuyPerMFO"]), float(hh.loc["2026-09", "CliBuyPerMFO"])
+    fxe = read_ir_chart("3.12")
+    fg, hw, oil, bs = (SC[k] for k in ("Дефіцит фінансування", "Важка зима", "Нафта $120", "Базовий"))
+    res, resm = K["reserves_end2026"], K["reserves_months_imports_end2026"]
+    v = dict(
+        date=date.today(), rate=n(cfg.RECOMMENDATION["rate"]), last_year=cfg.LAST_FORE[:4], target_year=target_q[:4],
+        target_q=f"{roman[target_q[-1]]} кв. {target_q[:4]}", dec=n(K["nowcast_dec_yoy"]),
+        opt_lt=n(OP["λ = 1, без реакції на адмінціни"]["2026Q4"]), opt_l2=n(OP["λ = 2"]["2026Q4"]), opt_l1=n(OP["λ = 1"]["2026Q4"]),
+        loss_rec=n(PO[rec]["Втрати (інфляція² + 0,5·розрив²)"]), loss_17=n(PO["Підвищити до 17%"]["Втрати (інфляція² + 0,5·розрив²)"]),
+        loss_16=n(PO["Утримати 16%"]["Втрати (інфляція² + 0,5·розрив²)"]),
+        gdp27_rec=n(PO[rec]["ВВП 2027, %"]), gdp27_17=n(PO["Підвищити до 17%"]["ВВП 2027, %"]),
+        rir26=n(base.loc[K["first_forecast"], "rir_pol"]), rir_tnd26=n(base.loc[K["first_forecast"], "rir_tnd"]),
+        r27=n(half(Q["2027Q4"]["ir_pol"])), r28=n(half(Q["2028Q4"]["ir_pol"])), r29=n(round(Q[cfg.LAST_FORE]["ir_pol"]), 0),
+        gdp26=n(A["2026"]["Реальний ВВП, % (рік)"]), gdp27=n(A["2027"]["Реальний ВВП, % (рік)"]), gdp28=n(A["2028"]["Реальний ВВП, % (рік)"]),
+        nbu_gdp26=n(nbu_v("Реальний ВВП", "2026")), nbu_gdp27=n(nbu_v("Реальний ВВП", "2027")), nbu_gdp28=n(nbu_v("Реальний ВВП", "2028")),
+        dip28="–".join(dip), cpi26=n(Q["2026Q4"]["d4l_cpi"]), cpi27=n(Q["2027Q4"]["d4l_cpi"]),
+        core27=n(A["2027"]["Базова інфляція, % р/р (IV кв.)"]), core28=n(A["2028"]["Базова інфляція, % р/р (IV кв.)"]),
+        nbu_cpi27=n(nbu_v("ІСЦ (на кінець", "2027Q4")), nbu_core27=n(nbu_v("Базова інфляція", "2027Q4")),
+        nbu_core28=n(nbu_v("Базова інфляція", "2028Q4")), rule29=n(K["rule_after_hold"]["2029Q4"]),
+        nc_trend=n(nc["Тренд (SA)"].iloc[-1], 2),
+        nc_months=", ".join(f"{months[i[-2:]]} {n(r['ІСЦ м/м, прогноз'], 2)}%" for i, r in nc.iterrows()),
+        eur26=n(Q[K["first_forecast"]]["uah_eur"]), eur29=n(Q[cfg.LAST_FORE]["uah_eur"]),
+        bt_model=f"{n(bt['model'].min())}–{n(bt['model'].max())}", bt_naive=f"{n(bt['naive'].min())}–{n(bt['naive'].max())}",
+        fan27_lo=n(K["fan_cpi"]["2027Q4"]["q15"]), fan27_hi=n(K["fan_cpi"]["2027Q4"]["q85"]), fan27_mid=n(K["fan_cpi"]["2027Q4"]["q50"]),
+        sales=n(K["reserves_recent"]["sales_per_month"]), inflows=n(K["reserves_recent"]["inflows_per_month"]),
+        nbu_res=n(K["reserves_nbu"]["end2026"]), nbu_res_m=n(K["reserves_nbu"]["months"]),
+        need=n(K["reserves_nbu"]["inflow_needed_per_month"]),
+        res_lo=n(min(res.values()), 0), res_hi=n(max(res.values()), 0),
+        res_cases=" / ".join("$" + n(x, 0) if i == 0 else n(x, 0) for i, x in enumerate(res.values())),
+        res_months=" / ".join(n(x) for x in resm.values()),
+        fg_uah=n(fg["Курс IV кв. 2027, грн/€"], 0), fg_dep=n((fg["Курс IV кв. 2027, грн/€"] / bs["Курс IV кв. 2027, грн/€"] - 1) * 100, 0),
+        fg_peak=n(fg["ІСЦ пік"]), fg_rate=n(fg["Ставка пік"]), fg_gdp=n(fg["ВВП 2027, % (рік)"]),
+        hw_peak=n(hw["ІСЦ пік"]), hw_rate=n(hw["Ставка пік"]), hw_gdp=n(hw["ВВП 2027, % (рік)"]),
+        oil_q4=n(oil["ІСЦ IV кв. 2026"] - bs["ІСЦ IV кв. 2026"]), oil_peak=n(oil["ІСЦ пік"] - bs["ІСЦ пік"]),
+        oil_rate=n(oil["Ставка пік"] - bs["Ставка пік"]),
+        hh_jul=n(hh_jul, 2), hh_sep=n(hh_sep, 2), hh_pct=n((hh_sep / hh_jul - 1) * 100, 0),
+        fx_exp_month=str(fxe["Фінансові аналітики"].dropna().index[-1]),
+        fx_exp_an=n(fxe["Фінансові аналітики"].dropna().iloc[-1]), fx_exp_hh=n(fxe["Домогосподарства"].dropna().iloc[-1]),
+    )
+    tpl = (DOCS / "templates" / "qa_prep.md").read_text(encoding="utf-8")
+    (DOCS / "qa_prep.md").write_text(tpl.format_map(v), encoding="utf-8")
+
+
 if __name__ == "__main__":
     DOCS.mkdir(exist_ok=True)
     assumptions()
     summary()
-    print("docs/assumptions.md, docs/forecast_summary.md")
+    qa()
+    print("docs/assumptions.md, docs/forecast_summary.md, docs/qa_prep.md")

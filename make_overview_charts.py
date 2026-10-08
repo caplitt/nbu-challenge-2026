@@ -70,6 +70,59 @@ def fx():
     pl.save(fig, FIG / "ov_fx.png", "НБУ (офіційний курс, інтервенції, резерви; прогноз — Інфляційний звіт, липень 2026)")
 
 
+def bop():
+    """Balance of payments (NBU July 2026 forecast table + Inflation Report chart 3.13): trade and its financing."""
+    from qpm.nbu_files import read_ir_chart, read_nbu_forecast
+    fc = read_nbu_forecast()
+    years = [2023, 2024, 2025, 2026, 2027, 2028]
+
+    def ann(name):
+        s = fc[fc["indicator"] == name].set_index("period")["value"]
+        return pd.Series([float(s.get(str(y), np.nan)) for y in years], index=years)
+
+    trade = pd.DataFrame({"Експорт": ann("Експорт товарів та послуг, млрд дол."),
+                          "Імпорт": ann("Імпорт товарів та послуг, млрд дол."),
+                          "Перекази": ann("Приватні грошові перекази в Україну, млрд дол.")})
+    fin = read_ir_chart("3.13").loc[2023:2028]
+    trade.to_csv("data/overview/bop_trade.csv", encoding="utf-8-sig")
+    fin.to_csv("data/overview/bop_financing.csv", encoding="utf-8-sig")
+
+    fig, ax = pl.grid(1, 2, width=13, height=3.7)
+    x = np.arange(len(years))
+    labels = [f"{y}{'*' if y >= 2026 else ''}" for y in years]
+    for k, (col, dx) in enumerate((("Експорт", -0.2), ("Імпорт", 0.2))):
+        ax[0].bar(x + dx, trade[col], width=0.38, color=pl.SERIES[k], label=col, edgecolor=pl.INK["surface"], lw=1.5,
+                  zorder=3)
+    for xi, (e, m) in enumerate(zip(trade["Експорт"], trade["Імпорт"])):
+        ax[0].annotate(f"−{m - e:.0f}", (xi + 0.2, m), xytext=(0, 3), textcoords="offset points", ha="center", fontsize=8,
+                       color=pl.INK["secondary"])
+    ax[0].set_xticks(x, labels)
+    ax[0].set_ylim(0, trade["Імпорт"].max() * 1.12)
+    ax[0].grid(axis="x", visible=False)
+    ax[0].set_title("Експорт та імпорт товарів і послуг, $ млрд (над стовпцем — дефіцит)")
+
+    parts = [("Поточний рахунок", pl.SERIES[1]), ("ПІІ", pl.SERIES[2]), ("ERA (кредити)", pl.SERIES[0]),
+             ("Ukraine Facility", pl.SERIES[3]), ("MFA", pl.SERIES[6]), ("Очікувані позики", pl.SERIES[4])]
+    pos, neg = np.zeros(len(years)), np.zeros(len(years))
+    for col, colour in parts:
+        v = fin[col].reindex(years).fillna(0).values
+        bottom = np.where(v >= 0, pos, neg)
+        ax[1].bar(x, v, bottom=bottom, width=0.6, color=colour, label=col, edgecolor=pl.INK["surface"], lw=1.5, zorder=3)
+        pos += np.clip(v, 0, None)
+        neg += np.clip(v, None, 0)
+    ax[1].plot(x, fin["Широкий базовий баланс"].reindex(years).values, "o-", color=pl.INK["primary"], lw=2, zorder=5,
+               label="Широкий базовий баланс")
+    ax[1].axhline(0, color=pl.INK["axis"], lw=1)
+    ax[1].set_xticks(x, labels)
+    ax[1].grid(axis="x", visible=False)
+    ax[1].set_title("Фінансування поточного рахунку, $ млрд")
+    ax[1].set_ylim(neg.min() * 1.12, pos.max() * 1.12)
+    ax[1].legend(ncol=4, fontsize=7.5, loc="upper center", bbox_to_anchor=(0.5, -0.1), frameon=False)
+    ax[0].legend(loc="upper left", bbox_to_anchor=(0.0, -0.1), ncol=2, frameon=False)
+    fig.subplots_adjust(bottom=0.3)
+    pl.save(fig, FIG / "ov_bop.png", "НБУ, макропрогноз та Інфляційний звіт (липень 2026), графік 3.13; * — прогноз НБУ")
+
+
 def activity():
     g, b, w = overview.load("gdp"), overview.load("business"), overview.load("wages")
     fig, ax = pl.grid(1, 3, width=13, height=3.6)
@@ -157,7 +210,7 @@ def fx_households():
 def main():
     if "--fetch" in sys.argv:
         overview.build()
-    for fn in (inflation, expectations, rates, fx, activity, fiscal, external, fx_households):
+    for fn in (inflation, expectations, rates, fx, bop, activity, fiscal, external, fx_households):
         fn()
     print("Готово:", sorted(p.name for p in FIG.glob("ov_*.png")))
 

@@ -49,10 +49,14 @@ def write_iris_csv(df: pd.DataFrame, path, comments: dict | None = None):
                           encoding="utf-8")
 
 
-def seasonal_adjust(s: pd.Series, period: int) -> pd.Series:
-    """Multiplicative seasonal adjustment with STL on logs (stand-in for IRIS x12)."""
+def seasonal_adjust(s: pd.Series, period: int, robust: bool = False) -> pd.Series:
+    """Multiplicative seasonal adjustment with STL on logs (stand-in for IRIS x12).
+
+    Not robust by default: robust STL down-weights the 2022 war shock as outliers and then mis-estimates the
+    changed seasonal pattern of core prices — SA core CPI kept a Q2 dip (0–3% q/q ann. in 2023–2025 vs ~10% in
+    other quarters) that showed up as offsetting core / non-core shocks of ±7 pp."""
     x = s.dropna()
-    res = STL(np.log(x.values), period=period, robust=True).fit()
+    res = STL(np.log(x.values), period=period, robust=robust).fit()
     out = pd.Series(np.nan, index=s.index)
     out.loc[x.index] = np.exp(np.log(x.values) - res.seasonal)
     return out
