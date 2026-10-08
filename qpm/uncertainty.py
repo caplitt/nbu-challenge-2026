@@ -12,7 +12,7 @@ import pandas as pd
 from .kalman import FilterResult
 from .model import Model
 
-DOMESTIC_SHOCKS = ["res_dl_cpi", "res_l_gdp_gap", "res_l_er_uip", "res_dl_er_tar", "res_ir_tlr", "res_prem_uip_gap"]
+DOMESTIC_SHOCKS = ["res_dl_cpi_c", "res_dl_rnc", "res_l_gdp_gap", "res_l_er_uip", "res_dl_er_tar", "res_ir_tlr", "res_prem_uip_gap"]
 
 
 def empirical_sigma(filt: FilterResult, start="2023Q1", end=None) -> pd.Series:

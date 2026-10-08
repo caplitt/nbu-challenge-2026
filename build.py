@@ -13,6 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PY = sys.executable
+MATLAB = Path(os.environ.get("MATLAB_EXE", "C:/Program Files/MATLAB/R2026b/bin/matlab.exe"))
+IRIS = Path(os.environ.get("IRIS_PATH", str(Path.home() / "Documents" / "MATLAB" / "IRIS-Toolbox-Release-20230622")))
 
 
 def step(title, cmd, env=None):
@@ -29,6 +31,13 @@ def main():
     step("Дані та графіки огляду", [PY, "make_overview_charts.py"] + (["--fetch"] if fetch else []))
     step("Фільтр, прогноз, сценарії", [PY, "run_forecast.py"])
     step("Функції відгуку", [PY, "run_irfs.py"])
+    step("Вхідні дані для MATLAB/IRIS", [PY, "matlab/export_inputs.py"])
+    if MATLAB.exists() and IRIS.exists() and "--no-matlab" not in sys.argv:
+        step("MATLAB/IRIS: фільтр, сценарії, функції відгуку", [str(MATLAB), "-batch",
+             f"addpath('{IRIS}'); iris.startup('silent',true); cd('matlab'); run_check"])
+    else:
+        print("MATLAB/IRIS недоступні — використовую збережені результати MATLAB (якщо актуальні)")
+    step("Звірка Python ↔ MATLAB", [PY, "matlab/compare_with_matlab.py"])
     step("Документація", [PY, "make_docs.py"])
     step("Зміст презентації", [PY, "deck/content.py"])
     step("Презентація (pptxgenjs)", ["node", "deck/build_deck.js"],

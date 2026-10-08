@@ -41,6 +41,14 @@ EA_ASSUMPTIONS = {
             "2028Q1": 2.75, "2028Q2": 2.75, "2028Q3": 2.5, "2028Q4": 2.5},
 }
 
+# Нафта Brent: факт (EIA spot через DBnomics + ф'ючерси найближчого місяця, Yahoo) до останнього повного кварталу;
+# далі — ф'ючерсна крива (NYMEX BZ) на дату оновлення. Курс USD/EUR: факт (ЄЦБ), далі — припущення НБУ
+# (у середньому 1,16 у 2026, 1,18 у 2027, 1,19 у 2028 — макропрогноз, липень 2026).
+OIL_ASSUMPTIONS = {
+    "usd_per_eur": {2026: 1.16, 2027: 1.18, 2028: 1.19},
+    "source": "Brent: EIA (DBnomics), ф'ючерси NYMEX BZ (Yahoo Finance); USD/EUR: ЄЦБ, припущення НБУ (липень 2026)",
+}
+
 
 def _period_m(s):
     return pd.Period(s, "M")
@@ -80,6 +88,16 @@ def update_monthly(log):
 
     new = pd.period_range(last_tmpl + 1, cutoff, freq="M")
     dm.loc[new, "D_CPI_su_m"] = cpi["cpi_mom"].reindex(new).values
+
+    # Core CPI (team extension of the model): NBU file CCPI_m.xlsx (Derzhstat), m-o-m %, from 2008;
+    # the latest months from the NBU API.
+    core = read_core_cpi()
+    core = core.combine_first(cpi["core_mom"].dropna())
+    dm["D_CPI_C_su_m"] = core.reindex(dm.index)
+    com["D_CPI_C_su_m"] = "Core CPI, pct m-o-m, seasonally unadjusted"
+    chk = pd.DataFrame({"core m/m (файл НБУ)": read_core_cpi(), "core m/m (API)": cpi["core_mom"]}).dropna()
+    log.append(f"Базовий ІСЦ: файл НБУ CCPI_m.xlsx (з {core.index.min()}) + API; розбіжність на перекритті "
+               f"{(chk.iloc[:, 0] - chk.iloc[:, 1]).abs().max():.2f} в. п.\n")
     dm.loc[new, "IR_POLICY_m"] = key_eom.reindex(new).values
     dm.loc[new, "ER_m"] = eur_avg.reindex(new).round(4).values
     log.append("## Додані місяці\n")
@@ -88,6 +106,20 @@ def update_monthly(log):
                f"(statdirectory/key), на кінець місяця; курс EUR — офіційний курс НБУ, середній за місяць.\n")
     write_iris_csv(dm, OUT / "monthly.csv", com)
     return cpi
+
+
+def read_core_cpi() -> pd.Series:
+    """Core CPI m-o-m % from the NBU macro file data/raw/nbu/CCPI_m.xlsx (sheet '1')."""
+    import openpyxl
+    wb = openpyxl.load_workbook(RAW / "nbu" / "CCPI_m.xlsx", read_only=True, data_only=True)
+    rows = [list(r) for r in wb["1"].iter_rows(values_only=True)]
+    dates = next(r for r in rows if len(r) > 1 and hasattr(r[1], "year"))
+    mom = next(r for r in rows if r and isinstance(r[0], str) and r[0].startswith("до попереднього місяця"))
+    s = {}
+    for d, v in zip(dates[1:], mom[1:]):
+        if d is not None and v not in (None, "…"):
+            s[pd.Period(d, "M")] = round(float(v), 2)
+    return pd.Series(s).sort_index()
 
 
 def update_quarterly(log):
@@ -191,7 +223,41 @@ def update_foreign(log):
                "річні темпи; ВВП — ECB MNA (EA21, I10), ланцюгово через кв/кв; ставка — депозитна ставка ЄЦБ "
                "на кінець кварталу.\n")
     dx["CPI_EA"], dx["GDP_EA"], dx["IR_EA"] = cpi_new.round(3), gdp_new.round(3), ir_new
+    update_oil(dx, com, log)
     write_iris_csv(dx, OUT / "foreign.csv", com)
+
+
+def update_oil(dx, com, log):
+    """Brent in USD and EUR per barrel (quarterly averages) + futures-curve assumptions on the horizon."""
+    brent = fetch.brent_monthly("1999-01")
+    brent.to_csv(RAW / "brent_monthly.csv", header=["brent_usd"])
+    usd = fetch.ecb_usd_per_eur("1999-01")
+    usd.to_csv(RAW / "ecb_usd_per_eur.csv", header=["usd_per_eur"])
+    last_full_q = pd.Period(CUTOFF_MONTH, "M").asfreq("Q")
+    if pd.Period(CUTOFF_MONTH, "M").month % 3 != 0:
+        last_full_q -= 1
+    bq = brent.groupby(brent.index.asfreq("Q")).mean().loc[:last_full_q]
+    uq = usd.groupby(usd.index.asfreq("Q")).mean().loc[:last_full_q]
+    horizon = [q for q in dx.index if q > last_full_q]
+    fut = fetch.brent_futures([str(q.asfreq("M", "end")) for q in horizon])
+    fut.index = fut.index.asfreq("Q")
+    fut.to_csv(RAW / "brent_futures.csv", header=["brent_futures"])
+    path = pd.Series(np.nan, index=horizon)
+    path.update(fut)
+    known = path.dropna()
+    if len(known) == 0:
+        raise RuntimeError("Не вдалося отримати ф'ючерсну криву Brent")
+    path = path.interpolate(limit_direction="both")
+    dx["BRENT_USD"] = pd.concat([bq.reindex(dx.index[dx.index <= last_full_q]), path]).reindex(dx.index).round(2)
+    usd_path = pd.Series([OIL_ASSUMPTIONS["usd_per_eur"].get(q.year, np.nan) for q in horizon], index=horizon)
+    dx["USD_EUR"] = pd.concat([uq.reindex(dx.index[dx.index <= last_full_q]), usd_path]).reindex(dx.index).round(4)
+    dx["OIL_EA"] = (dx["BRENT_USD"] / dx["USD_EUR"]).round(3)
+    com.update({"BRENT_USD": "Brent, USD per barrel, period average", "USD_EUR": "USD per EUR, period average",
+                "OIL_EA": "Brent, EUR per barrel, period average"})
+    log.append("## Нафта Brent\n")
+    log.append(f"Факт до {last_full_q} (EIA spot до {brent.attrs.get('eia_last')}, далі ф'ючерси найближчого місяця); "
+               f"далі — ф'ючерсна крива; USD/EUR — ЄЦБ, далі припущення НБУ. {OIL_ASSUMPTIONS['source']}.\n")
+    log.append(dx[["BRENT_USD", "USD_EUR", "OIL_EA"]].loc["2025Q1":"2028Q4"].to_markdown() + "\n")
 
 
 def main():

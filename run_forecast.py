@@ -28,6 +28,8 @@ def _q(df, col, per):
 def main():
     FIG.mkdir(parents=True, exist_ok=True)
     TAB.mkdir(parents=True, exist_ok=True)
+    for old in TAB.glob("forecast_*.csv"):   # scenario / option names may change between runs
+        old.unlink()
     ctx = pipeline.prepare(cfg)
     model, f, fc = ctx["model"], ctx["rngfcast"][0], ctx["rngfcast"]
     tar = model.params["dl_cpi_tar"]
@@ -39,8 +41,11 @@ def main():
     # ------------------------------------------------------------- scenarios and policy options
     base_plan = pipeline.base_plan(ctx)
     rec = cfg.RECOMMENDED_RATE_PATH
-    scen = {name: pipeline.run(ctx, pipeline.with_rate_path(fn(base_plan.copy(), f), rec))
-            for name, fn in cfg.SCENARIOS.items()}
+    base_rec = pipeline.with_rate_path(base_plan, rec)
+    scen = {}
+    for name, fn in cfg.SCENARIOS.items():
+        plan_s = base_rec if name == "Базовий" else fn(pipeline.nowcast_to_shock(ctx, base_rec), f, ctx)
+        scen[name] = pipeline.run(ctx, plan_s)
     base = scen["Базовий"]
     pol = {name: pipeline.run(ctx, pipeline.with_rate_path(base_plan, path)) for name, path in cfg.POLICY_OPTIONS.items()}
     # optimal rate path (min of quadratic loss), with sensitivity to the smoothing weight
@@ -51,6 +56,10 @@ def main():
                                    "Втрати: оптимум": round(L["optimal"], 1), "Втрати: правило": round(L["rule"], 1)}
         if ws == 1.0:
             pol["Оптимальна (мін. втрат)"] = res_o
+    # the same with first-round effects of administered prices looked through (they are not in the loss)
+    _, path_lt, L = optimal.optimal_path(ctx, pipeline.base_plan(ctx, look_through=True), w_gap=0.5, w_smooth=1.0)
+    opt_rows["λ = 1, без реакції на адмінціни"] = {**{str(p): round(float(v), 2) for p, v in path_lt.items()},
+                                                    "Втрати: оптимум": round(L["optimal"], 1), "Втрати: правило": round(L["rule"], 1)}
     opt_tab = pd.DataFrame(opt_rows).T
     opt_tab.to_csv(TAB / "optimal_paths.csv", encoding="utf-8-sig")
     print(opt_tab)
@@ -278,6 +287,15 @@ def main():
                        color=pl.SERIES[2], zorder=6, label="Прогноз НБУ (липень), кінець кварталу")
         axn[0].legend(loc="upper right")
         pl.save(fig, FIG / "fc_nowcast.png", "Держстат, НБУ; розрахунки команди (тренд + сезонність + судження)")
+
+    # 10) headline vs core: our baseline and NBU July forecast (end of quarter)
+    nbu_core = nbu_q("Базова інфляція")
+    fig, axc = pl.grid(1, 1, width=7, height=3.6)
+    pl.line_panel(axc[0], {"ІСЦ (наш прогноз)": base["d4l_cpi"], "Базова (наш прогноз)": base["d4l_cpi_c"],
+                           "ІСЦ (НБУ, липень)": nbu_cpi.loc[f:], "Базова (НБУ, липень)": nbu_core.loc[f:]},
+                  "Загальна та базова інфляція", f, target=tar, target_label="ціль 5%", unit="% р/р",
+                  rng=("2024Q1", cfg.LAST_FORE))
+    pl.save(fig, FIG / "fc_core.png", "розрахунки команди (наш прогноз — середнє за квартал); НБУ — кінець кварталу")
 
     print("Графіки:", sorted(p.name for p in FIG.glob("fc_*.png")))
 

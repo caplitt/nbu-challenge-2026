@@ -1,3 +1,11 @@
+% QPM NBU (NBU University Challenge 2026 template) + team extensions:
+%   1) CPI split into core (Phillips curve, real exchange rate on core prices) and the relative price
+%      of non-core goods (fuel, food, administered prices), as in the NBU working QPM
+%      (Grui & Vdovychenko, 2019); headline CPI = core + non-core relative price; the policy rule targets headline.
+%   2) Imported energy channel: the non-core relative price responds to the real Brent price in EUR and to
+%      the real exchange rate (fuel is priced in foreign currency).
+% The original template is kept unchanged in nbu_template/model/model.model.
+
 !transition_equations
 % GAPS and TRENDS DECOMP
 l_gdp = l_gdp_gap + l_gdp_tnd;
@@ -24,7 +32,8 @@ l_gdp_tnd = l_gdp_tnd{-1} + dl_gdp_tnd/4 + res_l_gdp_tnd; % incl. structural bre
 
 l_rer_tnd = l_rer_tnd{-1} + dl_rer_tnd/4 + res_l_rer_tnd; % incl. structural break
 
-l_rer = l_er - l_cpi + l_cpi_ea;
+% Team extension: real exchange rate on core prices
+l_rer = l_er - l_cpi_c + l_cpi_ea;
 
 rir_pol = ir_pol - d4l_cpi{+1};
 
@@ -34,6 +43,15 @@ l_cpi = l_cpi{-1} + dl_cpi/4;
 
 l_cpi = l_cpi{-4} + d4l_cpi;
 
+% Team extension: headline = core + relative price of non-core goods
+l_cpi = l_cpi_c + l_rnc;
+
+l_cpi_c = l_cpi_c{-1} + dl_cpi_c/4;
+
+l_cpi_c = l_cpi_c{-4} + d4l_cpi_c;
+
+l_rnc = l_rnc{-1} + dl_rnc/4;
+
 l_er_tar = l_er{-1} + dl_er_tar/4;
 
 % MAIN FOUR EQUATIONS
@@ -42,10 +60,14 @@ l_gdp_gap = 0.7*l_gdp_gap{-1} - 0.4*mci + 0.3*l_gdp_ea_gap + res_l_gdp_gap;
 
 mci = 0.5*(-1)*l_rer_gap + 0.3*rir_pol_gap + (1 - 0.5 - 0.3)*prem_uip_gap;
 
-% Inflation
-dl_cpi = 0.4*dl_cpi{-1} + (1 - 0.4)*dl_cpi{+1} + 0.3*rmc + res_dl_cpi;
+% Inflation: Phillips curve for core inflation (template coefficients)
+dl_cpi_c = 0.4*dl_cpi_c{-1} + (1 - 0.4)*dl_cpi_c{+1} + 0.3*rmc + res_dl_cpi_c;
 
 rmc = 0.6*l_gdp_gap + (1 - 0.6)*l_rer_gap;
+
+% Team extension: non-core relative price (fuel, food, administered prices);
+% imported energy cost = real Brent in EUR + real exchange rate
+dl_rnc = 0.3*dl_rnc{-1} + w_oil*(dl_roil + 4*(l_rer - l_rer{-1})) + res_dl_rnc;
 
 % Exchange rate
 l_er = beta*l_er_tar + (1 - beta)*l_er_uip;
@@ -76,11 +98,23 @@ l_gdp_ea_gap = 0.7*l_gdp_ea_gap{-1} + res_l_gdp_ea_gap;
 % Sovereign risk premium
 prem_uip_gap = 0.6*prem_uip_gap{-1} + res_prem_uip_gap;
 
+% Team extension: real oil price (Brent in EUR deflated by HICP), 100*log
+dl_roil = 0.3*dl_roil{-1} + res_dl_roil;
+
+l_roil = l_roil{-1} + dl_roil/4;
+
 !transition_variables
 % CPI - concumer price index
 'CPI, q-o-q' dl_cpi
 'CPI, y-o-y' d4l_cpi
 'CPI' l_cpi
+
+% Core CPI and relative price of non-core goods (team extension)
+'Core CPI, q-o-q' dl_cpi_c
+'Core CPI, y-o-y' d4l_cpi_c
+'Core CPI' l_cpi_c
+'Non-core relative price' l_rnc
+'Non-core relative price, q-o-q' dl_rnc
 
 % MCI - monetary conditions index
 'MCI' mci
@@ -124,6 +158,10 @@ prem_uip_gap = 0.6*prem_uip_gap{-1} + res_prem_uip_gap;
 'EA CPI, q-o-q' dl_cpi_ea
 'EA GDP gap' l_gdp_ea_gap
 
+% Oil - real Brent price in EUR (team extension)
+'Real oil price' l_roil
+'Real oil price, q-o-q' dl_roil
+
 % Prem UIP - sovereign risk premium
 'Prem UIP' prem_uip
 'Prem UIP gap' prem_uip_gap
@@ -131,7 +169,8 @@ prem_uip_gap = 0.6*prem_uip_gap{-1} + res_prem_uip_gap;
 
 !transition_shocks
 res_l_gdp_gap
-res_dl_cpi
+res_dl_cpi_c
+res_dl_rnc
 res_l_er_uip
 res_dl_er_tar
 res_ir_uip
@@ -144,6 +183,7 @@ res_l_gdp_ea_gap
 res_prem_uip_gap
 res_l_gdp_tnd
 res_l_rer_tnd
+res_dl_roil
 
 !parameters
 alpha
@@ -157,15 +197,18 @@ dl_gdp_tnd_ss
 prem_uip_tnd_ss
 dl_cpi_ea_tar
 rir_ea_tnd_ss
+w_oil
 
 !measurement_equations
 L_GDP = l_gdp;
 L_CPI = l_cpi;
+L_CPI_C = l_cpi_c;
 IR_POLICY = ir_pol;
 L_ER = l_er;
 IR_EA = ir_ea;
 L_CPI_EA = l_cpi_ea;
 L_GDP_EA_GAP = l_gdp_ea_gap;
+L_ROIL = l_roil;
 
 L_GDP_GAP = l_gdp_gap; % optional tunes on gaps
 % L_RER_GAP = l_rer_gap;
@@ -173,17 +216,13 @@ L_GDP_GAP = l_gdp_gap; % optional tunes on gaps
 !measurement_variables
 L_GDP
 L_CPI
+L_CPI_C
 IR_POLICY
 L_ER
 IR_EA
 L_CPI_EA
 L_GDP_EA_GAP
+L_ROIL
 
 L_GDP_GAP
 % L_RER_GAP
-
-
-
-
-
-

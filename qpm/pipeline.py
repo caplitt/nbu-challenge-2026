@@ -10,8 +10,9 @@ from .model import Model
 from .nowcast import as_dict, cpi_nowcast
 from .simulate import Plan, forecast
 
-EXTERNAL = [("ir_ea", "res_ir_ea"), ("l_gdp_ea_gap", "res_l_gdp_ea_gap"), ("dl_cpi_ea", "res_dl_cpi_ea")]
-DOMESTIC_OBS = ("L_GDP", "L_CPI", "IR_POLICY", "L_ER")
+EXTERNAL = [("ir_ea", "res_ir_ea"), ("l_gdp_ea_gap", "res_l_gdp_ea_gap"), ("dl_cpi_ea", "res_dl_cpi_ea"),
+            ("dl_roil", "res_dl_roil")]
+DOMESTIC_OBS = ("L_GDP", "L_CPI", "L_CPI_C", "IR_POLICY", "L_ER")
 
 
 def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
@@ -40,8 +41,11 @@ def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
                 rngfcast=pd.period_range(pd.Period(last_hist, "Q") + 1, cfg.LAST_FORE, freq="Q"))
 
 
-def base_plan(ctx, judgments: bool = True) -> Plan:
-    """External sector fixed to the assumptions; CPI nowcast conditions; judgment shocks."""
+def base_plan(ctx, judgments: bool = True, look_through: bool = False) -> Plan:
+    """External sector fixed to the assumptions; CPI nowcast conditions; judgment shocks.
+
+    look_through=True drops judgments marked first_round (administered prices, excises): the plan a central
+    bank that ignores first-round effects of such price changes would optimise against."""
     cfg = ctx["cfg"]
     fc = ctx["rngfcast"]
     plan = Plan(fc)
@@ -53,18 +57,33 @@ def base_plan(ctx, judgments: bool = True) -> Plan:
             p = pd.Period(q, "Q")
             if p in fc and not pd.isna(ctx["dq"].loc[p, "L_CPI"]):
                 plan.exogenize("l_cpi", [p], [ctx["dq"].loc[p, "L_CPI"]])
-                plan.endogenize("res_dl_cpi", [p])
+                plan.endogenize("res_dl_rnc", [p])   # near-term surprises are mostly non-core (food, fuel, tariffs)
     if judgments:
         fx = {pd.Period(k, "Q"): v for k, v in getattr(cfg, "FX_TARGET_PATH", {}).items() if pd.Period(k, "Q") in fc}
         if fx:
             plan.exogenize("dl_er_tar", list(fx), list(fx.values()))
             plan.endogenize("res_dl_er_tar", list(fx))
         for j in getattr(cfg, "JUDGMENTS", []):
+            if look_through and j.get("first_round"):
+                continue
             pers = [pd.Period(x, "Q") for x in j["periods"]]
             keep = [(p, v) for p, v in zip(pers, j["values"]) if p in fc]
             if keep:
                 plan.shock(j["shock"], [p for p, _ in keep], [v for _, v in keep])
     return plan
+
+
+def oil_dl_roil(ctx, brent_usd: dict) -> dict:
+    """Real oil price changes (dl_roil, annualized %) implied by an alternative Brent path in USD per barrel."""
+    dq = ctx["dq"]
+    brent = dq["BRENT_USD"].copy()
+    for q, v in brent_usd.items():
+        brent[pd.Period(q, "Q")] = v
+    l_roil = 100 * np.log(brent / dq["USD_EUR"]) - dq["L_CPI_EA"]
+    dl = 4 * l_roil.diff()
+    fc = ctx["rngfcast"]
+    last = max(pd.Period(q, "Q") for q in brent_usd) + 1
+    return {p: float(dl[p]) for p in fc if p <= last}
 
 
 def with_rate_path(plan: Plan, path: dict | None) -> Plan:
@@ -75,6 +94,23 @@ def with_rate_path(plan: Plan, path: dict | None) -> Plan:
         plan.exogenize("ir_pol", pers, list(path.values()))
         plan.endogenize("res_ir_tlr", pers)
     return plan
+
+
+def nowcast_to_shock(ctx, plan: Plan) -> Plan:
+    """Replace the CPI nowcast condition by the cost-push shock it implies in this plan, so that scenario
+    shocks (oil, exchange rate, ...) can move CPI in the nowcast quarters instead of being absorbed."""
+    cond = list(plan.exo.get("l_cpi", {}))
+    if not cond:
+        return plan
+    implied = run(ctx, plan).attrs["shocks"]
+    out = plan.copy()
+    for per in cond:
+        out.exo["l_cpi"].pop(per)
+        out.endo["res_dl_rnc"].discard(per)
+        out.shocks.setdefault("res_dl_rnc", {})[per] = float(implied.loc[per, "res_dl_rnc"])  # total, not added
+    out.exo = {k: v for k, v in out.exo.items() if v}
+    out.endo = {k: v for k, v in out.endo.items() if v}
+    return out
 
 
 def run(ctx, plan: Plan, model: Model | None = None) -> pd.DataFrame:
@@ -92,12 +128,13 @@ def run(ctx, plan: Plan, model: Model | None = None) -> pd.DataFrame:
 def add_reporting(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["gdp_yoy"] = df["l_gdp"].diff(4)
+    df["core_yoy"] = df["d4l_cpi_c"]
     df["uah_eur"] = np.exp(df["l_er"] / 100)
     df["uah_eur_yoy"] = df["l_er"].diff(4)
     return df
 
 
-LABELS = {"d4l_cpi": "ІСЦ, % р/р (сер. за кв.)", "gdp_yoy": "ВВП, % р/р", "ir_pol": "Облікова ставка, % (сер. за кв.)",
+LABELS = {"d4l_cpi": "ІСЦ, % р/р (сер. за кв.)", "d4l_cpi_c": "Базова інфляція, % р/р", "gdp_yoy": "ВВП, % р/р", "ir_pol": "Облікова ставка, % (сер. за кв.)",
           "uah_eur": "Курс, грн/€ (сер. за кв.)", "l_gdp_gap": "Розрив ВВП, %"}
 
 
@@ -119,7 +156,8 @@ def annual_table(df: pd.DataFrame, years=(2025, 2026, 2027, 2028)) -> pd.DataFra
         q4 = pd.Period(f"{y}Q4", "Q")
         lvl = df["l_gdp"]
         gdp = (np.exp(lvl.loc[f"{y}Q1":f"{y}Q4"] / 100).mean() / np.exp(lvl.loc[f"{y - 1}Q1":f"{y - 1}Q4"] / 100).mean() - 1) * 100
-        out[y] = {"ІСЦ, % р/р (IV кв.)": df.loc[q4, "d4l_cpi"], "Реальний ВВП, % (рік)": gdp,
+        out[y] = {"ІСЦ, % р/р (IV кв.)": df.loc[q4, "d4l_cpi"], "Базова інфляція, % р/р (IV кв.)": df.loc[q4, "d4l_cpi_c"],
+                  "Реальний ВВП, % (рік)": gdp,
                   "Облікова ставка, % (IV кв.)": df.loc[q4, "ir_pol"], "Курс, грн/€ (IV кв.)": df.loc[q4, "uah_eur"]}
     return pd.DataFrame(out).round(1)
 

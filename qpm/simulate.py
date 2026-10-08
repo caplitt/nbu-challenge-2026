@@ -28,7 +28,7 @@ class Plan:
 
     exogenize(var, periods, values) + endogenize(shock, periods) mirrors IRIS.
     Shocks are anticipated (perfect foresight over the horizon), as in jforecast(..., 'anticipate', true).
-    Fixed shock values (judgment) can be set with `shock(name, periods, values)`.
+    Fixed shock values (judgment) are added with `shock(name, periods, values)`.
     """
 
     periods: pd.PeriodIndex
@@ -58,9 +58,12 @@ class Plan:
         return self
 
     def shock(self, shock, periods, values):
+        """Add a judgment shock; values add up with shocks already in the plan (scenarios go on top of the baseline)."""
         pers = self._pers(periods)
         vals = np.broadcast_to(np.asarray(values, float), (len(pers),))
-        self.shocks.setdefault(shock, {}).update(dict(zip(pers, vals)))
+        d = self.shocks.setdefault(shock, {})
+        for p, v in zip(pers, vals):
+            d[p] = d.get(p, 0.0) + float(v)
         return self
 
 

@@ -44,7 +44,7 @@ def assumptions():
     L.append("| Шок | Квартали | Значення | Обґрунтування | Джерело |\n|---|---|---|---|---|")
     for j in cfg.JUDGMENTS:
         L.append(f"| `{j['shock']}` | {', '.join(j['periods'])} | {', '.join(n(v, 2) for v in j['values'])} | {j['why']} | {j['source']} |")
-    L.append("\nОдиниці: `res_dl_cpi` — в. п. квартальної інфляції в річному вимірі; `res_l_gdp_gap` — % потенціалу; "
+    L.append("\nОдиниці: `res_dl_cpi_c` / `res_dl_rnc` — в. п. квартальної базової інфляції / зміни небазових цін у річному вимірі; `res_l_gdp_gap` — % потенціалу; "
              "`res_prem_uip_gap` — в. п. премії за ризик; `res_dl_gdp_tnd` — в. п. темпу потенційного ВВП.\n")
     L.append("## 3. Траєкторія цільового курсу (dl_er_tar, % річних)\n")
     L.append(" · ".join(f"{k}: {v}" for k, v in cfg.FX_TARGET_PATH.items()))
@@ -54,6 +54,11 @@ def assumptions():
     L.append("## 4. Зовнішні припущення\n")
     L.append("- Єврозона: HICP 3,0 / 2,5 / 2,1% (2026–2028), ВВП 0,9 / 1,4 / 1,5% — прогноз ЄЦБ (вересень 2026); "
              "ставка ЄЦБ 2,75% (IV кв. 2026) → 3,0% (2027) → 2,5% (кінець 2028) — ринкові очікування (OIS).")
+    fo = pd.read_csv(ROOT / "data" / "foreign.csv", index_col=0)
+    br = {q: float(fo.loc[q, "BRENT_USD"]) for q in ("2026Q3", "2026Q4", "2027Q4", "2028Q4") if q in fo.index}
+    L.append("- Нафта Brent: " + " → ".join(f"{q} ${n(v, 0)}" for q, v in br.items()) +
+             " (факт EIA до III кв. 2026, далі ф'ючерсна крива NYMEX BZ); реальна ціна в євро входить у небазову "
+             "інфляцію з вагою `w_oil` = 0,016 (`model/params.yaml`).")
     L.append("- Деталі та джерела — `data/UPDATE_LOG.md`.\n")
     L.append("## 5. Рішення, за яким будується базовий прогноз\n")
     L.append(f"- {cfg.RECOMMENDATION['option']}: середня ставка IV кв. 2026 = {n(cfg.RECOMMENDATION['rate'])}%, "

@@ -105,13 +105,25 @@ def external():
     fig, ax = pl.grid(1, 2, height=3.6)
     pl.line_panel(ax[0], {"Інфляція HICP, % р/р": hicp, "Ставка ЄЦБ (депозитна), %": dx["IR_EA"].loc["2023Q1":"2028Q4"]},
                   "Єврозона", first_assump, target=2, target_label="ціль ЄЦБ 2%", rng=("2023Q1", "2028Q4"))
-    e = overview.load("energy")
-    brent = e["Brent (поточний прогноз)"]
-    pl.line_panel(ax[1], {"Припущення НБУ (липень 2026)": brent}, "Нафта Brent", pd.Period("2026Q3", "Q"),
-                  unit="$/бар.", rng=("2026Q3", "2028Q4"))
-    ax[1].scatter([2026.67], [100], marker="D", s=35, color=pl.SERIES[1], zorder=6, label="Факт: ≈100 (вересень 2026)")
-    ax[1].legend(loc="upper right")
-    pl.save(fig, FIG / "ov_external.png", "Eurostat, ЄЦБ (прогноз вересня 2026), НБУ; Brent у вересні — Reuters")
+    # Brent: monthly actual, futures curve (model assumption) and NBU's July assumption (quarterly)
+    b = pd.read_csv("data/raw/brent_monthly.csv", index_col=0)["brent_usd"]
+    b.index = pd.PeriodIndex(b.index, freq="M")
+    fut = dx["BRENT_USD"].loc["2026Q4":"2028Q4"]
+    nbu = overview.load("energy")["Brent (поточний прогноз)"]
+    a = ax[1]
+    act = b.loc["2023-01":]
+    a.plot(act.index.to_timestamp(), act.values, color=pl.SERIES[0], label="Факт (середнє за місяць)")
+    a.plot([p.asfreq("M", "end").to_timestamp() for p in fut.index], fut.values, color=pl.SERIES[1], marker="o", ms=4,
+           mec=pl.INK["surface"], label="Ф'ючерсна крива (наше припущення)")
+    a.plot([p.asfreq("M", "end").to_timestamp() for p in nbu.index], nbu.values, color=pl.SERIES[2], marker="o", ms=4,
+           mec=pl.INK["surface"], label="Припущення НБУ (липень 2026)")
+    a.axvspan(pd.Timestamp("2026-10-01"), pd.Timestamp("2028-12-31"), color=pl.INK["forecast"], zorder=0, lw=0)
+    import matplotlib.dates as mdates
+    a.xaxis.set_major_locator(mdates.YearLocator())
+    a.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    a.set_title("Нафта Brent, $/бар.")
+    a.legend(loc="upper left", fontsize=8)
+    pl.save(fig, FIG / "ov_external.png", "Eurostat, ЄЦБ (прогноз вересня 2026); Brent — EIA, NYMEX (ф'ючерси), НБУ")
 
 
 def fx_households():

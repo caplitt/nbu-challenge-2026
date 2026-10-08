@@ -40,7 +40,8 @@ def test_blanchard_kahn(model):
     (0.8, -0.201, -0.235, -0.069),
 ])
 def test_irf_matches_matlab(model, beta, gap_min, cpi_min, er_t1):
-    r = irf(model.with_params(beta=beta), "res_ir_tlr", 1, 20)
+    # w_oil = 0 switches off the team's energy channel: the model then reduces exactly to the NBU template
+    r = irf(model.with_params(beta=beta, w_oil=0), "res_ir_tlr", 1, 20)
     assert r["l_gdp_gap"].min() == pytest.approx(gap_min, abs=2e-3)
     assert r["d4l_cpi"].min() == pytest.approx(cpi_min, abs=2e-3)
     assert r["l_er"].iloc[1] == pytest.approx(er_t1, abs=2e-3)
@@ -49,7 +50,8 @@ def test_irf_matches_matlab(model, beta, gap_min, cpi_min, er_t1):
 def test_filter_reproduces_observables(ctx):
     v, dq = ctx["filt"].vars, ctx["dq"]
     hist = pd.period_range("2016Q1", "2026Q2", freq="Q")
-    for obs, var in (("L_GDP", "l_gdp"), ("L_CPI", "l_cpi"), ("IR_POLICY", "ir_pol"), ("L_ER", "l_er")):
+    for obs, var in (("L_GDP", "l_gdp"), ("L_CPI", "l_cpi"), ("L_CPI_C", "l_cpi_c"), ("IR_POLICY", "ir_pol"),
+                     ("L_ER", "l_er")):
         diff = (dq[obs].reindex(hist) - v[var].reindex(hist)).abs().max()
         assert diff < 1e-5, obs
 
@@ -69,6 +71,23 @@ def test_plan_requires_balance(model):
         forecast(model, np.zeros(model.n_states), plan)
 
 
+def test_scenario_shocks_add_to_judgments(ctx):
+    """Scenarios go on top of the baseline: a scenario shock adds to a judgment in the same quarter."""
+    plan = pipeline.base_plan(ctx)
+    q = pd.Period("2027Q1")
+    before = plan.shocks["res_l_gdp_gap"][q]
+    plan.shock("res_l_gdp_gap", [q], [-0.5])
+    assert plan.shocks["res_l_gdp_gap"][q] == pytest.approx(before - 0.5)
+
+
+def test_look_through_drops_first_round_judgments(ctx):
+    first_round = {j["shock"] for j in cfg.JUDGMENTS if j.get("first_round")}
+    assert first_round, "expected a first-round (administered prices) judgment"
+    lt = pipeline.base_plan(ctx, look_through=True)
+    for s in first_round:
+        assert not any(p.year >= 2027 for p in lt.shocks.get(s, {}))
+
+
 def test_cpi_nowcast_condition_respected(ctx):
     out = pipeline.run(ctx, pipeline.base_plan(ctx))
     q4 = pd.Period("2026Q4")
@@ -82,20 +101,32 @@ def test_deck_numbers_come_from_model():
     summary = next(s for s in deck["slides"] if s["type"] == "summary")
     q = key["baseline_quarterly"]
     cpi_row = summary["table"]["rows"][0]
-    assert cpi_row[1:] == [f"{q[p]['d4l_cpi']:.1f}".replace(".", ",") for p in ("2026Q4", "2027Q4", "2028Q4")]
+    from decimal import ROUND_HALF_UP, Decimal
+    fmt = [f"{Decimal(str(q[p]['d4l_cpi'])).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP):f}".replace(".", ",")
+           for p in ("2026Q4", "2027Q4", "2028Q4")]
+    assert cpi_row[1:] == fmt
     assert summary["cards"][0]["value"].startswith(f"{key['recommendation']['rate']:.1f}".replace(".", ","))
     assert key["baseline_quarterly"]["2026Q4"]["ir_pol"] == pytest.approx(key["recommendation"]["rate"], abs=1e-6)
 
 
 def test_matches_matlab_iris_if_available():
     """Python port vs the original NBU template run in MATLAB/IRIS (matlab/run_check.m)."""
-    out = ROOT / "matlab" / "outputs" / "forecast_matlab.csv"
+    out = ROOT / "matlab" / "outputs" / "forecast1_matlab.csv"
     if not out.exists():
         pytest.skip("немає результатів MATLAB (див. matlab/run_check.m)")
     from qpm.data import read_iris_csv
     ml, _ = read_iris_csv(out)
-    py = pd.read_csv(ROOT / "matlab" / "inputs" / "forecast_python.csv", index_col=0)
+    py = pd.read_csv(ROOT / "matlab" / "inputs" / "forecast1_python.csv", index_col=0)
     py.index = pd.PeriodIndex(py.index, freq="Q")
     for v in ("d4l_cpi", "ir_pol", "l_er", "l_gdp_gap"):
         d = (py[v] - ml[v]).loc["2026Q4":"2028Q4"].abs().max()
         assert d < 1e-4, v
+
+
+def test_oil_channel_has_no_spurious_reversal(model):
+    """+20% real oil: headline inflation rises ≈0.3 pp and the price level stays higher (no RER artefact)."""
+    shock = np.log(1.2) * 100 * 4 * (1 - 0.3)
+    r = irf(model, "res_dl_roil", shock, 16)
+    assert 0.25 < r["d4l_cpi"].max() < 0.45
+    assert r["d4l_cpi"].min() > -0.15
+    assert r["l_cpi"].iloc[-1] > 0.15

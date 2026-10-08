@@ -116,3 +116,47 @@ def fred(series_id: str, start: str = "2023-01-01") -> pd.Series:
     s = pd.to_numeric(df.iloc[:, 1], errors="coerce")
     s.index = pd.to_datetime(df.iloc[:, 0])
     return s.dropna()
+
+
+# ------------------------------------------------------------------ oil
+YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart"
+FUTURES_MONTH = {1: "F", 2: "G", 3: "H", 4: "J", 5: "K", 6: "M", 7: "N", 8: "Q", 9: "U", 10: "V", 11: "X", 12: "Z"}
+
+
+def _yahoo_daily(symbol: str, rng: str = "2y") -> pd.Series:
+    j = _get(f"{YAHOO}/{symbol}?range={rng}&interval=1d").json()["chart"]["result"][0]
+    s = pd.Series(j["indicators"]["quote"][0]["close"], index=pd.to_datetime(j["timestamp"], unit="s"))
+    return s.dropna()
+
+
+def brent_monthly(start: str = "1999-01") -> pd.Series:
+    """Brent, $/bbl, monthly average: EIA spot (via DBnomics) + front-month futures (Yahoo) for the latest months."""
+    doc = _get("https://api.db.nomics.world/v22/series/EIA/PET/RBRTE.M?observations=1").json()["series"]["docs"][0]
+    eia = pd.Series(doc["value"], index=pd.PeriodIndex(doc["period"], freq="M"), dtype=float)
+    fut = _yahoo_daily("BZ=F", "2y").resample("ME").mean()
+    fut.index = fut.index.to_period("M")
+    out = eia.combine_first(fut[fut.index > eia.index.max()])
+    out.attrs["eia_last"] = str(eia.index.max())
+    return out.loc[start:]
+
+
+def brent_futures(months: list[str]) -> pd.Series:
+    """Last price of Brent futures for contract months 'YYYY-MM' (NYMEX BZ, Yahoo)."""
+    out = {}
+    for m in months:
+        p = pd.Period(m, "M")
+        sym = f"BZ{FUTURES_MONTH[p.month]}{str(p.year)[2:]}.NYM"
+        try:
+            s = _yahoo_daily(sym, "5d")
+            if len(s):
+                out[p] = float(s.iloc[-1])
+        except Exception:
+            pass
+    return pd.Series(out, dtype=float)
+
+
+def ecb_usd_per_eur(start: str = "1999-01") -> pd.Series:
+    """ECB reference rate, USD per EUR, monthly average."""
+    s = ecb_series("EXR/M.USD.EUR.SP00.A", start)
+    s.index = pd.PeriodIndex(s.index, freq="M")
+    return s

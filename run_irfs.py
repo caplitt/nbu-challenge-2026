@@ -12,8 +12,10 @@ from qpm import plotting as pl
 from qpm.model import Model
 from qpm.simulate import irf
 
-SHOCKS = {"res_dl_cpi": "Шок витрат (інфляції)", "res_l_gdp_gap": "Шок попиту",
-          "res_ir_tlr": "Шок облікової ставки", "res_prem_uip_gap": "Шок премії за ризик"}
+SHOCKS = {"res_dl_cpi_c": "Шок базової інфляції", "res_dl_rnc": "Шок небазових цін", "res_l_gdp_gap": "Шок попиту",
+          "res_ir_tlr": "Шок облікової ставки", "res_prem_uip_gap": "Шок премії за ризик",
+          "res_dl_roil": "Нафтовий шок: Brent +20%"}
+SIZES = {"res_dl_roil": 100 * 0.18232 * 4 * (1 - 0.3)}   # permanent +20% real oil price (log 1.2 = 0.18232)
 RESPONSES = {"l_gdp_gap": "Розрив ВВП", "d4l_cpi": "ІСЦ, р/р", "ir_pol": "Облікова ставка",
              "l_er": "Курс грн/€ (рівень)", "l_rer_gap": "Розрив реального курсу", "rir_pol_gap": "Розрив реальної ставки"}
 GRIDS = {"beta": [0, 0.7, 1], "alpha": [0, 0.6, 1]}
@@ -24,7 +26,7 @@ def main(param="beta"):
     models = {f"{param} = {v:g}": base.with_params(**{param: v}) for v in GRIDS[param]}
     out = Path(cfg.RESULTS_DIR) / "figures"
     for shock, title in SHOCKS.items():
-        res = {k: irf(m, shock, 1, 20) for k, m in models.items()}
+        res = {k: irf(m, shock, SIZES.get(shock, 1), 20) for k, m in models.items()}
         fig, ax = pl.grid(2, 3, width=12, height=6.5)
         for i, (var, lab) in enumerate(RESPONSES.items()):
             a = ax[i]
@@ -35,7 +37,8 @@ def main(param="beta"):
             a.set_xlabel("квартали після шоку")
             if i == 0:
                 a.legend()
-        fig.suptitle(f"{title}: відгук на шок 1 п.п.", x=0.07, ha="left", fontsize=12, fontweight="bold")
+        fig.suptitle(title if shock in SIZES else f"{title}: відгук на шок 1 в. п.", x=0.07, ha="left", fontsize=12,
+                     fontweight="bold")
         pl.save(fig, out / f"irf_{shock}_{param}.png")
     print("Готово:", sorted(p.name for p in out.glob(f"irf_*_{param}.png")))
 

@@ -9,7 +9,9 @@ p.prem_uip_tnd_ss = 4;
 p.coef = 1;
 p.dl_cpi_ea_tar = 2;
 p.rir_ea_tnd_ss = 1;
-p.std_res_dl_cpi = 1;
+p.w_oil = 0.016;
+p.std_res_dl_cpi_c = 1;
+p.std_res_dl_rnc = 2;
 p.std_res_ir_tlr = 1;
 p.std_res_ir_uip = 1;
 p.std_res_l_gdp_gap = 0.5;
@@ -23,4 +25,5 @@ p.std_res_prem_uip_gap = 1.5;
 p.std_res_ir_ea = 1;
 p.std_res_dl_cpi_ea = 1;
 p.std_res_l_gdp_ea_gap = 1;
+p.std_res_dl_roil = 1;
 end

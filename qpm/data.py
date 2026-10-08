@@ -97,12 +97,22 @@ def read_data(data_dir="data", cpi_nowcast: dict | None = None, gdp_nowcast: dic
     cpi = (1 + dm["D_CPI_su_m"] / 100).cumprod(skipna=False)
     cpi = cpi / cpi.loc[pd.Period("2000-01", "M")]
     dm["CPI_m"] = seasonal_adjust(cpi, 12)
+    if "D_CPI_C_su_m" in dm:
+        # core CPI (team extension): same scale as headline in 2010M1, so that their log difference
+        # (relative price of non-core goods) starts near zero
+        cm = dm["D_CPI_C_su_m"]
+        core = (1 + cm.loc[cm.first_valid_index():] / 100).cumprod(skipna=False).reindex(dm.index)
+        base = pd.Period("2010-01", "M")
+        core = core / core.loc[base] * cpi.loc[base]
+        dm["CPI_C_m"] = seasonal_adjust(core, 12)
 
     # Monthly -> quarterly averages. Unlike the template's nanmean, a quarter needs all 3 months:
     # a partial quarter (e.g. Jul-Aug only) would bias the level; the Kalman filter fills it instead.
     q = pd.DataFrame(index=pd.period_range(min(dm.index.min().asfreq("Q"), dq.index.min(), dx.index.min()),
                                            max(dm.index.max().asfreq("Q"), dq.index.max(), dx.index.max()), freq="Q"))
-    for name, src in (("CPI", "CPI_m"), ("IR_POLICY", "IR_POLICY_m"), ("ER", "ER_m")):
+    for name, src in (("CPI", "CPI_m"), ("CPI_C", "CPI_C_m"), ("IR_POLICY", "IR_POLICY_m"), ("ER", "ER_m")):
+        if src not in dm:
+            continue
         g = dm[src].groupby(dm.index.asfreq("Q"))
         q[name] = g.mean().where(g.count() == 3)
     for col in dq.columns:
@@ -121,6 +131,8 @@ def read_data(data_dir="data", cpi_nowcast: dict | None = None, gdp_nowcast: dic
         q[f"D4L_{name}"] = q[f"L_{name}"].diff(4)
 
     q["L_GDP_EA_GAP"] = hp_gap(q["L_GDP_EA"])
+    if "L_OIL_EA" in q:
+        q["L_ROIL"] = q["L_OIL_EA"] - q["L_CPI_EA"]   # real Brent price in EUR (team extension)
     q.attrs["months_in_quarter"] = dm["D_CPI_su_m"].notna().groupby(dm.index.asfreq("Q")).sum()
     q.attrs["cpi_nowcast_months"] = nowcast_months
     return q
