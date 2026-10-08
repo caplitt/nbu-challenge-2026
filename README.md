@@ -12,6 +12,7 @@
 | Підсумки прогнозу | [`docs/forecast_summary.md`](docs/forecast_summary.md) |
 | Припущення і судження | [`docs/assumptions.md`](docs/assumptions.md) |
 | Методологія | [`docs/methodology.md`](docs/methodology.md) |
+| Текст виступу на 15 хв (з таймінгом і розподілом на доповідачів) | [`docs/speech.md`](docs/speech.md); той самий текст — у нотатках доповідача |
 | Підготовка до запитань журі | [`docs/qa_prep.md`](docs/qa_prep.md) |
 | Як оновлювати до дедлайну й фіналу | [`docs/update_guide.md`](docs/update_guide.md) |
 | Звірка з MATLAB/IRIS | [`docs/matlab_check.md`](docs/matlab_check.md) — максимальна розбіжність ~1e−5 |
