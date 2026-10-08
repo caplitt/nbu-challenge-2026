@@ -39,6 +39,7 @@ def main():
         print("MATLAB/IRIS недоступні — використовую збережені результати MATLAB (якщо актуальні)")
     step("Звірка Python ↔ MATLAB", [PY, "matlab/compare_with_matlab.py"])
     step("Документація", [PY, "make_docs.py"])
+    step("Обсяг роботи (docx)", ["node", "deck/scope_docx.js"], env={"NODE_PATH": str(ROOT / "deck" / "node_modules")})
     step("Зміст презентації", [PY, "deck/content.py"])
     step("Презентація (pptxgenjs)", ["node", "deck/build_deck.js"],
          env={"NODE_PATH": str(ROOT / "deck" / "node_modules")})

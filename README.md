@@ -11,7 +11,7 @@
 | Презентація | [`presentation/NBU_University_Challenge_2026.pptx`](presentation/NBU_University_Challenge_2026.pptx) (+ `.pdf`) — 34 слайди з нотатками доповідача |
 | Підсумки прогнозу | [`docs/forecast_summary.md`](docs/forecast_summary.md) |
 | Припущення і судження | [`docs/assumptions.md`](docs/assumptions.md) |
-| Обсяг роботи: дані, зміни моделі, судження, перевірки (з посиланнями) | [`docs/scope_of_work.md`](docs/scope_of_work.md) |
+| Обсяг роботи: дані, зміни моделі, судження, перевірки (з посиланнями) | [`docs/scope_of_work.md`](docs/scope_of_work.md) (+ Word: `docs/scope_of_work.docx`) |
 | Методологія | [`docs/methodology.md`](docs/methodology.md) |
 | Текст виступу на 15 хв (з таймінгом і розподілом на доповідачів) | [`docs/speech.md`](docs/speech.md); той самий текст — у нотатках доповідача |
 | Підготовка до запитань журі | [`docs/qa_prep.md`](docs/qa_prep.md) |
