@@ -32,7 +32,8 @@ def main():
         old.unlink()
     ctx = pipeline.prepare(cfg)
     model, f, fc = ctx["model"], ctx["rngfcast"][0], ctx["rngfcast"]
-    tar = model.params["dl_cpi_tar"]
+    tar = model.params["dl_cpi_tar"]             # model units (100*log); reports show % y/y
+    tar_pct = round(float(pipeline.pct(tar)), 2)  # = 5.0
     print(f"Історія до {cfg.LAST_HIST}, прогноз {f}–{cfg.LAST_FORE}")
     ctx["filt"].vars.to_csv(TAB / "filter.csv")
     if ctx["nowcast"] is not None:
@@ -45,7 +46,7 @@ def main():
     base = scen["Базовий"]
     rule = pipeline.run(ctx, pipeline.with_rate_path(base_plan, cfg.RECOMMENDED_RATE_PATH))
     print("Базовий vs чисте правило після утримання, ІСЦ IV кв. 2028 / 2029:",
-          [round(float(d.loc[q, "d4l_cpi"]), 2) for d in (base, rule) for q in ("2028Q4", "2029Q4")])
+          [round(float(d.loc[q, "cpi_yoy"]), 2) for d in (base, rule) for q in ("2028Q4", "2029Q4")])
     pol = {name: pipeline.run(ctx, pipeline.policy_plan(ctx, base_plan, path)) for name, path in cfg.POLICY_OPTIONS.items()}
     # optimal rate path from the October decision on (min of quadratic loss), sensitivity to the smoothing weight
     tp = {k: v for k, v in cfg.TARGET_PATH.items() if k != "w_smooth"}
@@ -69,22 +70,26 @@ def main():
     annual = pipeline.annual_table(base)
     annual.to_csv(TAB / "baseline_annual.csv", encoding="utf-8-sig")
 
-    # policy options: simple loss over the policy horizon 2027-2029 = sum of (CPI - target)^2 + 0.5 * gap^2
-    per_loss = pd.period_range("2027Q1", cfg.LAST_FORE, freq="Q")
+    # policy options: the optimiser's own loss (inflation vs target, output gap, rate changes incl. the decision itself)
+    # over the whole horizon — higher rates cut inflation faster but need sharper rate moves, so there is an interior
+    # minimum; the smoothing weight is a preference, so the best option is reported for each weight
+    loss_w = {ws: {name: optimal.policy_loss(ctx, df, **{**cfg.TARGET_PATH, "w_smooth": ws}) for name, df in pol.items()}
+              for ws in (0.5, 1.0, 2.0)}
+    best_option = {f"λ = {ws:g}": min(cfg.POLICY_OPTIONS, key=loss_w[ws].get) for ws in loss_w}
+    print("Найкращий варіант за вагою згладжування:", best_option)
     pol_tab = pd.DataFrame({
         name: {"Ставка IV кв. 2026": df.loc[f, "ir_pol"], "Ставка I кв. 2027": _q(df, "ir_pol", "2027Q1"),
                "Ставка IV кв. 2027": _q(df, "ir_pol", "2027Q4"), "Ставка IV кв. 2028": _q(df, "ir_pol", "2028Q4"),
-               "ІСЦ I кв. 2027": _q(df, "d4l_cpi", "2027Q1"), "ВВП 2027, %": float(pipeline.annual_table(df).loc["Реальний ВВП, % (рік)", 2027]),
-               "ІСЦ IV кв. 2027": _q(df, "d4l_cpi", "2027Q4"), "ІСЦ IV кв. 2028": _q(df, "d4l_cpi", "2028Q4"),
-               "ІСЦ IV кв. 2029": _q(df, "d4l_cpi", "2029Q4"),
+               "ІСЦ I кв. 2027": _q(df, "cpi_yoy", "2027Q1"), "ВВП 2027, %": float(pipeline.annual_table(df).loc["Реальний ВВП, % (рік)", 2027]),
+               "ІСЦ IV кв. 2027": _q(df, "cpi_yoy", "2027Q4"), "ІСЦ IV кв. 2028": _q(df, "cpi_yoy", "2028Q4"),
+               "ІСЦ IV кв. 2029": _q(df, "cpi_yoy", "2029Q4"),
                "Розрив ВВП, сер. 2027": df["l_gdp_gap"].loc["2027Q1":"2027Q4"].mean(),
-               "Втрати (інфляція² + 0,5·розрив²)": float(((df.loc[per_loss, "d4l_cpi"] - tar) ** 2
-                                                         + 0.5 * df.loc[per_loss, "l_gdp_gap"] ** 2).sum())}
+               **{f"Втрати, λ = {ws:g}": loss_w[ws][name] for ws in loss_w}}
         for name, df in pol.items()}).T.round(2)
     pol_tab.to_csv(TAB / "policy_options.csv", encoding="utf-8-sig")
     scen_tab = pd.DataFrame({
-        name: {"ІСЦ IV кв. 2026": _q(df, "d4l_cpi", "2026Q4"), "ІСЦ пік": float(df.loc[fc, "d4l_cpi"].max().round(2)),
-               "ІСЦ IV кв. 2027": _q(df, "d4l_cpi", "2027Q4"), "ІСЦ IV кв. 2029": _q(df, "d4l_cpi", "2029Q4"),
+        name: {"ІСЦ IV кв. 2026": _q(df, "cpi_yoy", "2026Q4"), "ІСЦ пік": float(df.loc[fc, "cpi_yoy"].max().round(2)),
+               "ІСЦ IV кв. 2027": _q(df, "cpi_yoy", "2027Q4"), "ІСЦ IV кв. 2029": _q(df, "cpi_yoy", "2029Q4"),
                "Ставка пік": float(df.loc[fc, "ir_pol"].max().round(2)),
                "Ставка IV кв. 2027": _q(df, "ir_pol", "2027Q4"), "Курс IV кв. 2027, грн/€": _q(df, "uah_eur", "2027Q4"),
                "ВВП 2027, % (рік)": float(pipeline.annual_table(df).loc["Реальний ВВП, % (рік)", 2027])}
@@ -95,6 +100,7 @@ def main():
     # ------------------------------------------------------------- uncertainty
     sigma = uncertainty.empirical_sigma(ctx["filt"], "2023Q1", cfg.LAST_HIST)
     bands = uncertainty.fan(model, base, fc, sigma)
+    bands["cpi_yoy"] = pipeline.pct(bands.pop("d4l_cpi"))   # quantiles map one-to-one through the monotone transform
     for v, b in bands.items():
         b.to_csv(TAB / f"fan_{v}.csv")
 
@@ -120,7 +126,7 @@ def main():
     nbu_cpi, nbu_rate = nbu_q("ІСЦ (на кінець періоду)"), read_ir_chart("0.2").iloc[:, 0]
     nbu_gap = read_ir_chart("2.18").iloc[:, 0]
     comp = pd.DataFrame({
-        "ІСЦ IV кв., наш (сер. за кв.)": [_q(base, "d4l_cpi", f"{y}Q4") for y in (2026, 2027, 2028)],
+        "ІСЦ IV кв., наш (сер. за кв.)": [_q(base, "cpi_yoy", f"{y}Q4") for y in (2026, 2027, 2028)],
         "ІСЦ грудень, НБУ липень": [float(nbu_cpi[pd.Period(f"{y}Q4")]) for y in (2026, 2027, 2028)],
         "Ставка IV кв., наш": [_q(base, "ir_pol", f"{y}Q4") for y in (2026, 2027, 2028)],
         "Ставка IV кв., НБУ липень": [float(nbu_rate[pd.Period(f"{y}Q4")]) for y in (2026, 2027, 2028)],
@@ -137,15 +143,19 @@ def main():
         "data_cutoff": cfg.LAST_HIST, "first_forecast": str(f),
         "nowcast_dec_yoy": float(nc["ІСЦ р/р, прогноз"].iloc[-1]) if nc is not None else None,
         "nowcast_months": [str(p) for p in nc.index] if nc is not None else [],
-        "baseline_quarterly": {str(p): {c: float(round(base.loc[p, c], 2)) for c in ("d4l_cpi", "ir_pol", "uah_eur", "gdp_yoy", "l_gdp_gap")}
+        "baseline_quarterly": {str(p): {c: float(round(base.loc[p, c], 2)) for c in
+                                        ("cpi_yoy", "core_yoy", "ir_pol", "uah_eur", "gdp_yoy", "l_gdp_gap", "rir_pol", "rir_tnd")}
                                for p in fc},
+        "real_rate_last_hist": {c: float(round(base.loc[f - 1, c], 2)) for c in ("rir_pol", "rir_tnd")},
+        "best_option_by_lambda": best_option,
+        "brent_path": {q: round(float(ctx["dq"].loc[pd.Period(q, "Q"), "BRENT_USD"]), 1) for q in ("2026Q4", "2027Q4", "2028Q4")},
         "baseline_annual": {str(y): {k: float(v) for k, v in annual[y].items()} for y in annual.columns},
         "scenarios": scen_tab.to_dict(orient="index"),
         "policy_options": pol_tab.to_dict(orient="index"),
         "recommendation": cfg.RECOMMENDATION,
         "optimal_paths": opt_tab.to_dict(orient="index"),
-        "fan_cpi": {q: bands["d4l_cpi"].loc[pd.Period(q)].round(2).to_dict() for q in ("2027Q4", "2028Q4", "2029Q4")},
-        "rule_after_hold": {q: _q(rule, c, q) for q in ("2028Q4", "2029Q4") for c in ("d4l_cpi",)},
+        "fan_cpi": {q: bands["cpi_yoy"].loc[pd.Period(q)].round(2).to_dict() for q in ("2027Q4", "2028Q4", "2029Q4")},
+        "rule_after_hold": {q: _q(rule, "cpi_yoy", q) for q in ("2028Q4", "2029Q4")},
         "reserves_end2026": resv.iloc[-1].round(1).to_dict(),
         "reserves_months_imports_end2026": (resv.iloc[-1] / reserves.IMPORTS_PER_MONTH).round(1).to_dict(),
         "reserves_recent": {"sales_per_month": round(resv.attrs["sales"], 3),
@@ -164,9 +174,9 @@ def main():
     nbu_cpi_line = nbu_cpi.loc[f:]
     # 1) fan charts
     fig, ax = pl.grid(1, 2, height=3.8)
-    b = bands["d4l_cpi"]
-    pl.line_panel(ax[0], {"Базовий прогноз": base["d4l_cpi"], "Прогноз НБУ (липень), кінець кв.": nbu_cpi_line},
-                  "Інфляція (ІСЦ)", f, target=tar, target_label="ціль 5%", unit="% р/р", rng=RNG,
+    b = bands["cpi_yoy"]
+    pl.line_panel(ax[0], {"Базовий прогноз": base["cpi_yoy"], "Прогноз НБУ (липень), кінець кв.": nbu_cpi_line},
+                  "Інфляція (ІСЦ)", f, target=tar_pct, target_label="ціль 5%", unit="% р/р", rng=RNG,
                   bands=[(b["q15"], b["q85"], pl.BLUE_RAMP[150]), (b["q30"], b["q70"], pl.BLUE_RAMP[250])])
     br = bands["ir_pol"]
     pl.line_panel(ax[1], {"Базовий прогноз": base["ir_pol"], "Прогноз НБУ (липень)": nbu_rate.loc[f:]},
@@ -176,7 +186,7 @@ def main():
 
     # 2) scenarios (one strip of four panels: fits a full-width slide)
     fig, ax = pl.grid(1, 4, width=15, height=3.5)
-    pl.line_panel(ax[0], {k: v["d4l_cpi"] for k, v in scen.items()}, "Інфляція (ІСЦ)", f, target=tar,
+    pl.line_panel(ax[0], {k: v["cpi_yoy"] for k, v in scen.items()}, "Інфляція (ІСЦ)", f, target=tar_pct,
                   target_label="ціль 5%", unit="% р/р", rng=RNG, shared_history=True)
     pl.line_panel(ax[1], {k: v["ir_pol"] for k, v in scen.items()}, "Облікова ставка", f, unit="%", rng=RNG,
                   shared_history=True)
@@ -192,7 +202,7 @@ def main():
     fig, ax = pl.grid(1, 3, width=13, height=3.6)
     rng2 = ("2025Q1", cfg.LAST_FORE)
     pl.line_panel(ax[0], {k: v["ir_pol"] for k, v in pol.items()}, "Облікова ставка", f, unit="%", rng=rng2, shared_history=True)
-    pl.line_panel(ax[1], {k: v["d4l_cpi"] for k, v in pol.items()}, "Інфляція", f, target=tar, unit="% р/р", rng=rng2, shared_history=True)
+    pl.line_panel(ax[1], {k: v["cpi_yoy"] for k, v in pol.items()}, "Інфляція", f, target=tar_pct, unit="% р/р", rng=rng2, shared_history=True)
     pl.line_panel(ax[2], {k: v["l_gdp_gap"] for k, v in pol.items()}, "Розрив ВВП", f, target=0,
                   unit="% потенціалу", rng=rng2, shared_history=True)
     for a in ax[1:]:
@@ -241,7 +251,7 @@ def main():
 
     # 6) backtest
     fig, axb = pl.grid(1, 2, height=3.6)
-    for a, (lab, var) in zip(axb, (("ІСЦ, % р/р", "d4l_cpi"), ("Облікова ставка, %", "ir_pol"))):
+    for a, (lab, var) in zip(axb, (("ІСЦ, % р/р", "cpi_yoy"), ("Облікова ставка, %", "ir_pol"))):
         per = pd.PeriodIndex([pd.Period(c, "Q") for c in bt.columns])
         hist = actual[var].loc["2024Q1":per[-1]]
         fcl = pd.concat([actual[var].loc[["2025Q3"]], pd.Series(bt.loc[(lab, "Прогноз")].values.astype(float), index=per)])
@@ -281,7 +291,7 @@ def main():
         nowc = pd.concat([act.iloc[-1:], nc["ІСЦ р/р, прогноз"]])
         fig, axn = pl.grid(1, 1, width=7, height=3.6)
         pl.monthly_panel(axn[0], {"Факт": act, "Наш короткостроковий прогноз": nowc}, "Інфляція (ІСЦ)", "% р/р",
-                         target=tar, target_label="ціль 5%")
+                         target=tar_pct, target_label="ціль 5%")
         nbu_pts = {pd.Period("2026-09", "M"): float(nbu_cpi[pd.Period("2026Q3")]),
                    pd.Period("2026-12", "M"): float(nbu_cpi[pd.Period("2026Q4")])}
         axn[0].scatter([p.to_timestamp() for p in nbu_pts], list(nbu_pts.values()), marker="D", s=30,
@@ -292,9 +302,9 @@ def main():
     # 10) headline vs core: our baseline and NBU July forecast (end of quarter)
     nbu_core = nbu_q("Базова інфляція")
     fig, axc = pl.grid(1, 1, width=7, height=3.6)
-    pl.line_panel(axc[0], {"ІСЦ (наш прогноз)": base["d4l_cpi"], "Базова (наш прогноз)": base["d4l_cpi_c"],
+    pl.line_panel(axc[0], {"ІСЦ (наш прогноз)": base["cpi_yoy"], "Базова (наш прогноз)": base["core_yoy"],
                            "ІСЦ (НБУ, липень)": nbu_cpi.loc[f:], "Базова (НБУ, липень)": nbu_core.loc[f:]},
-                  "Загальна та базова інфляція", f, target=tar, target_label="ціль 5%", unit="% р/р",
+                  "Загальна та базова інфляція", f, target=tar_pct, target_label="ціль 5%", unit="% р/р",
                   rng=("2024Q1", cfg.LAST_FORE))
     pl.save(fig, FIG / "fc_core.png", "розрахунки команди (наш прогноз — середнє за квартал); НБУ — кінець кварталу")
 

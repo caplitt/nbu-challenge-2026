@@ -162,16 +162,23 @@ def run(ctx, plan: Plan, model: Model | None = None) -> pd.DataFrame:
     return out
 
 
+def pct(log_diff):
+    """Model growth rates are 100*log differences (as in the NBU QPM); reports show ordinary % changes."""
+    return (np.exp(log_diff / 100) - 1) * 100
+
+
 def add_reporting(df: pd.DataFrame) -> pd.DataFrame:
+    """Reporting variables in ordinary % y/y: at 10% inflation the log difference is ≈0.5 pp lower."""
     df = df.copy()
-    df["gdp_yoy"] = df["l_gdp"].diff(4)
-    df["core_yoy"] = df["d4l_cpi_c"]
+    df["cpi_yoy"] = pct(df["d4l_cpi"])
+    df["core_yoy"] = pct(df["d4l_cpi_c"])
+    df["gdp_yoy"] = pct(df["l_gdp"].diff(4))
     df["uah_eur"] = np.exp(df["l_er"] / 100)
-    df["uah_eur_yoy"] = df["l_er"].diff(4)
+    df["uah_eur_yoy"] = pct(df["l_er"].diff(4))
     return df
 
 
-LABELS = {"d4l_cpi": "ІСЦ, % р/р (сер. за кв.)", "d4l_cpi_c": "Базова інфляція, % р/р", "gdp_yoy": "ВВП, % р/р", "ir_pol": "Облікова ставка, % (сер. за кв.)",
+LABELS = {"cpi_yoy": "ІСЦ, % р/р (сер. за кв.)", "core_yoy": "Базова інфляція, % р/р", "gdp_yoy": "ВВП, % р/р", "ir_pol": "Облікова ставка, % (сер. за кв.)",
           "uah_eur": "Курс, грн/€ (сер. за кв.)", "l_gdp_gap": "Розрив ВВП, %"}
 
 
@@ -193,7 +200,7 @@ def annual_table(df: pd.DataFrame, years=(2025, 2026, 2027, 2028, 2029)) -> pd.D
         q4 = pd.Period(f"{y}Q4", "Q")
         lvl = df["l_gdp"]
         gdp = (np.exp(lvl.loc[f"{y}Q1":f"{y}Q4"] / 100).mean() / np.exp(lvl.loc[f"{y - 1}Q1":f"{y - 1}Q4"] / 100).mean() - 1) * 100
-        out[y] = {"ІСЦ, % р/р (IV кв.)": df.loc[q4, "d4l_cpi"], "Базова інфляція, % р/р (IV кв.)": df.loc[q4, "d4l_cpi_c"],
+        out[y] = {"ІСЦ, % р/р (IV кв.)": df.loc[q4, "cpi_yoy"], "Базова інфляція, % р/р (IV кв.)": df.loc[q4, "core_yoy"],
                   "Реальний ВВП, % (рік)": gdp,
                   "Облікова ставка, % (IV кв.)": df.loc[q4, "ir_pol"], "Курс, грн/€ (IV кв.)": df.loc[q4, "uah_eur"]}
     return pd.DataFrame(out).round(1)

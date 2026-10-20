@@ -10,7 +10,7 @@ import pandas as pd
 
 from . import pipeline
 
-VARS = {"d4l_cpi": "ІСЦ, % р/р", "ir_pol": "Облікова ставка, %", "uah_eur": "Курс, грн/€", "gdp_yoy": "ВВП, % р/р"}
+VARS = {"cpi_yoy": "ІСЦ, % р/р", "ir_pol": "Облікова ставка, %", "uah_eur": "Курс, грн/€", "gdp_yoy": "ВВП, % р/р"}
 
 
 def run(cfg, origin: str, actual: pd.DataFrame, horizon: int = 4) -> pd.DataFrame:

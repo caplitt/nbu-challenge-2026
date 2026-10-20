@@ -81,8 +81,9 @@ def assumptions():
 
 def summary():
     q = pd.DataFrame(K["baseline_quarterly"]).T
-    q = q.rename(columns={"d4l_cpi": "ІСЦ, % р/р", "ir_pol": "Ставка, %", "uah_eur": "грн/€", "gdp_yoy": "ВВП, % р/р",
-                          "l_gdp_gap": "Розрив ВВП, %"})
+    q = q.rename(columns={"cpi_yoy": "ІСЦ, % р/р", "core_yoy": "Базова, % р/р", "ir_pol": "Ставка, %", "uah_eur": "грн/€",
+                          "gdp_yoy": "ВВП, % р/р", "l_gdp_gap": "Розрив ВВП, %", "rir_pol": "Реальна ставка, %",
+                          "rir_tnd": "Нейтральна реальна ставка, %"})
     L = [f"# Підсумки прогнозу\n\nЗгенеровано {date.today()} (`python make_docs.py`) з `results/key_numbers.json`.\n",
          "## Рекомендація\n"]
     R = K["recommendation"]
@@ -129,10 +130,14 @@ def qa():
         return round(x * 2) / 2
 
     qs = list(Q)
-    target_q = next(q for i, q in enumerate(qs) if all(abs(Q[r]["d4l_cpi"] - 5) <= 0.1 for r in qs[i:]))
+    target_q = next(q for i, q in enumerate(qs) if all(abs(Q[r]["cpi_yoy"] - 5) <= 0.1 for r in qs[i:]))
     roman = {"1": "I", "2": "II", "3": "III", "4": "IV"}
-    q28 = [Q[f"2028Q{i}"]["d4l_cpi"] for i in range(1, 5)]
-    dip = sorted({n(min(q28)), n(Q["2028Q4"]["d4l_cpi"])}, key=lambda t: float(t.replace(",", ".").replace("−", "-")))
+    q28 = [Q[f"2028Q{i}"]["cpi_yoy"] for i in range(1, 5)]
+    dip = sorted({n(min(q28)), n(Q["2028Q4"]["cpi_yoy"])}, key=lambda t: float(t.replace(",", ".").replace("−", "-")))
+    loss = "Втрати, λ = " + n(cfg.TARGET_PATH["w_smooth"], 0)
+    best = K["best_option_by_lambda"]
+    rate_of = lambda name: name.split(" ")[-1].rstrip("%")  # noqa: E731  'Підвищити до 17,5%' -> '17,5'
+    bp = K["brent_path"]
     bt = pd.read_csv(TAB / "backtest_errors.csv", index_col=[0, 1], encoding="utf-8-sig")
     bt.columns = ["model", "naive"]
     bt = bt[[i[1].startswith("ІСЦ") for i in bt.index]]
@@ -148,17 +153,21 @@ def qa():
         date=date.today(), rate=n(cfg.RECOMMENDATION["rate"], 0 if cfg.RECOMMENDATION["rate"] % 1 == 0 else 1), last_year=cfg.LAST_FORE[:4], target_year=target_q[:4],
         target_q=f"{roman[target_q[-1]]} кв. {target_q[:4]}", dec=n(K["nowcast_dec_yoy"]),
         opt_lt=n(OP["λ = 1, без реакції на адмінціни"]["2026Q4"]), opt_l2=n(OP["λ = 2"]["2026Q4"]), opt_l1=n(OP["λ = 1"]["2026Q4"]),
-        loss_rec=n(PO[rec]["Втрати (інфляція² + 0,5·розрив²)"]),
-        loss_16=n(PO["Утримати 16%"]["Втрати (інфляція² + 0,5·розрив²)"]),
-        loss_165=n(PO["Підвищити до 16,5%"]["Втрати (інфляція² + 0,5·розрив²)"]),
-        loss_175=n(PO["Підвищити до 17,5%"]["Втрати (інфляція² + 0,5·розрив²)"]),
+        loss_rec=n(PO[rec][loss]), loss_16=n(PO["Утримати 16%"][loss]),
+        loss_165=n(PO["Підвищити до 16,5%"][loss]), loss_175=n(PO["Підвищити до 17,5%"][loss]),
+        loss_opt=n(PO["Оптимальна (мін. втрат)"][loss]),
+        best="; ".join(f"{k.replace('.', ',')} — {rate_of(v)}%" for k, v in best.items()),
+        rir_now=n(K["real_rate_last_hist"]["rir_pol"]), rir_tnd_now=n(K["real_rate_last_hist"]["rir_tnd"]),
+        rir_q2=n(Q["2027Q2"]["rir_pol"]), rir_tnd_q2=n(Q["2027Q2"]["rir_tnd"]),
+        brent26=n(bp["2026Q4"], 0), brent27=n(bp["2027Q4"], 0), brent28=n(bp["2028Q4"], 0),
+        cpi26_log=n(float(base.loc[K["first_forecast"], "d4l_cpi"])),
         cpi27_16=n(PO["Утримати 16%"]["ІСЦ IV кв. 2027"]),
         gdp27_rec=n(PO[rec]["ВВП 2027, %"]), gdp27_175=n(PO["Підвищити до 17,5%"]["ВВП 2027, %"]),
         rir26=n(base.loc[K["first_forecast"], "rir_pol"]), rir_tnd26=n(base.loc[K["first_forecast"], "rir_tnd"]),
         r27=n(half(Q["2027Q4"]["ir_pol"])), r28=n(half(Q["2028Q4"]["ir_pol"])), r29=n(round(Q[cfg.LAST_FORE]["ir_pol"]), 0),
         gdp26=n(A["2026"]["Реальний ВВП, % (рік)"]), gdp27=n(A["2027"]["Реальний ВВП, % (рік)"]), gdp28=n(A["2028"]["Реальний ВВП, % (рік)"]),
         nbu_gdp26=n(nbu_v("Реальний ВВП", "2026")), nbu_gdp27=n(nbu_v("Реальний ВВП", "2027")), nbu_gdp28=n(nbu_v("Реальний ВВП", "2028")),
-        dip28="–".join(dip), cpi26=n(Q["2026Q4"]["d4l_cpi"]), cpi27=n(Q["2027Q4"]["d4l_cpi"]),
+        dip28="–".join(dip), cpi26=n(Q["2026Q4"]["cpi_yoy"]), cpi27=n(Q["2027Q4"]["cpi_yoy"]),
         core27=n(A["2027"]["Базова інфляція, % р/р (IV кв.)"]), core28=n(A["2028"]["Базова інфляція, % р/р (IV кв.)"]),
         nbu_cpi27=n(nbu_v("ІСЦ (на кінець", "2027Q4")), nbu_core27=n(nbu_v("Базова інфляція", "2027Q4")),
         nbu_core28=n(nbu_v("Базова інфляція", "2028Q4")), rule29=n(K["rule_after_hold"]["2029Q4"]),

@@ -92,9 +92,23 @@ def test_baseline_returns_to_point_target_within_horizon():
     """NBU: 5% point target (no tolerance band) within a policy horizon of up to three years."""
     key = json.loads((ROOT / "results/key_numbers.json").read_text(encoding="utf-8"))
     q = key["baseline_quarterly"]
-    assert q[cfg.LAST_FORE]["d4l_cpi"] == pytest.approx(5.0, abs=0.1)
+    assert q[cfg.LAST_FORE]["cpi_yoy"] == pytest.approx(5.0, abs=0.1)
     for per, rate in cfg.RECOMMENDED_RATE_PATH.items():       # the decision and the promised hold are kept
         assert q[per]["ir_pol"] == pytest.approx(rate, abs=1e-6)
+
+
+def test_reported_inflation_is_percent_and_matches_data(ctx):
+    """Reports show ordinary % y/y (the model works in 100*log differences); the target 100*ln(1.05) is exactly 5%.
+    The model's quarterly CPI y/y must match the Derzhstat monthly index averaged by quarter (up to seasonal adjustment)."""
+    assert pipeline.pct(ctx["model"].params["dl_cpi_tar"]) == pytest.approx(5.0, abs=1e-3)
+    rep = pipeline.add_reporting(ctx["filt"].vars)
+    m = pd.read_csv(ROOT / "data/overview/cpi.csv", index_col=0, encoding="utf-8-sig")["cpi_mom"].dropna()
+    m.index = pd.PeriodIndex(m.index, freq="M")
+    lvl = (1 + m / 100).cumprod()
+    qa = lvl.groupby(lvl.index.asfreq("Q")).mean()
+    yoy = (qa / qa.shift(4) - 1) * 100
+    for p in pd.period_range("2024Q1", cfg.LAST_HIST, freq="Q"):
+        assert rep.loc[p, "cpi_yoy"] == pytest.approx(yoy[p], abs=0.5), p
 
 
 def test_cpi_nowcast_condition_respected(ctx):
@@ -111,7 +125,7 @@ def test_deck_numbers_come_from_model():
     q = key["baseline_quarterly"]
     cpi_row = summary["table"]["rows"][0]
     from decimal import ROUND_HALF_UP, Decimal
-    fmt = [f"{Decimal(str(q[p]['d4l_cpi'])).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP):f}".replace(".", ",")
+    fmt = [f"{Decimal(str(q[p]['cpi_yoy'])).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP):f}".replace(".", ",")
            for p in ("2026Q4", "2027Q4", "2028Q4", "2029Q4")]
     assert cpi_row[1:] == fmt
     card_rate = float(summary["cards"][0]["value"].rstrip("%").replace(",", "."))

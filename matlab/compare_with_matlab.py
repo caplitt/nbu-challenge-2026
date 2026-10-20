@@ -92,6 +92,8 @@ def compare():
             k = names.index(name) + 1
             py = load_py(f"forecast{k}_python.csv")[var].loc["2026Q4":"2028Q4"]
             ml = ml_res[name][var].loc["2026Q4":"2028Q4"]
+            if var == "d4l_cpi":   # model units (100*log) -> % y/y, as everywhere in the deck
+                py, ml = ((np.exp(s / 100) - 1) * 100 for s in (py, ml))
             x = [p.year + (p.quarter - 1) / 4 for p in py.index]
             a.plot(x, py.values, color=pl.SERIES[i], label=f"{name}: Python")
             a.plot(x, ml.reindex(py.index).values, "o", ms=6, mfc="none", mec=pl.SERIES[i], mew=1.5,

@@ -68,11 +68,13 @@ for v = 1:4
     for k = numel(names):-1:1
         x = res{k}.(vars{v})(rngp);
         if strcmp(vars{v}, 'l_er'), x = exp(x/100); end
+        if strcmp(vars{v}, 'd4l_cpi'), x = 100*(exp(x/100) - 1); end   % 100*log difference -> % y/y, as in the deck
         x(1:nh-1) = NaN;
         h(k + 1) = plot(t, x, 'LineWidth', 2, 'Color', pal(k, :));
     end
     x = res{1}.(vars{v})(rngp);
     if strcmp(vars{v}, 'l_er'), x = exp(x/100); end
+    if strcmp(vars{v}, 'd4l_cpi'), x = 100*(exp(x/100) - 1); end
     x(nh+1:end) = NaN;
     h(1) = plot(t, x, 'LineWidth', 2, 'Color', [0.11 0.14 0.15]);
     yl = ylim(ax);

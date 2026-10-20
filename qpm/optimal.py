@@ -60,3 +60,14 @@ def optimal_path(ctx, plan: Plan, w_gap=0.5, w_smooth=0.5, fixed: dict | None = 
 
     path = pd.Series({**fixed, **dict(zip(ctrl, x_opt))}).sort_index()
     return res, path, {"optimal": loss(res), "rule": loss(base_rule)}
+
+
+def policy_loss(ctx, df: pd.DataFrame, w_gap=0.5, w_smooth=0.5, w_last=1.0, last_from: str | None = None) -> float:
+    """The same loss as in optimal_path, over the whole forecast horizon, including the decision itself (the
+    change from the last history quarter): comparable across decision options."""
+    fc = ctx["rngfcast"]
+    target = ctx["model"].params["dl_cpi_tar"]
+    w = np.array([w_last if last_from and p >= pd.Period(last_from, "Q") else 1.0 for p in fc])
+    pi, gap, i = (df[c].reindex(fc).values for c in ("d4l_cpi", "l_gdp_gap", "ir_pol"))
+    di = np.diff(np.concatenate([[float(ctx["filt"].vars.loc[fc[0] - 1, "ir_pol"])], i]))
+    return float((w * (pi - target) ** 2).sum() + w_gap * (gap ** 2).sum() + w_smooth * (di ** 2).sum())
