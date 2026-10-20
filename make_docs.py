@@ -18,11 +18,11 @@ K = json.loads((ROOT / "results" / "key_numbers.json").read_text(encoding="utf-8
 DOCS = ROOT / "docs"
 
 
-def n(x, d=1):
-    """Decimal comma, half-up rounding (as on the slides)."""
+def n(x, d=1, sign=False):
+    """Decimal comma, half-up rounding (as on the slides); optional explicit sign."""
     q = Decimal(str(float(x))).quantize(Decimal(1).scaleb(-d), rounding=ROUND_HALF_UP)
     q = abs(q) if q == 0 else q   # no "−0,0"
-    return f"{q:f}".replace(".", ",").replace("-", "−")
+    return (f"{q:+f}" if sign else f"{q:f}").replace(".", ",").replace("-", "−")
 
 
 def md_table(df: pd.DataFrame, fmt=lambda v: n(v) if isinstance(v, float) else str(v)) -> str:
@@ -149,7 +149,30 @@ def qa():
     fxe = read_ir_chart("3.12")
     fg, hw, oil, bs = (SC[k] for k in ("Дефіцит фінансування", "Важка зима", "Нафта $120", "Базовий"))
     res, resm = K["reserves_end2026"], K["reserves_months_imports_end2026"]
+    # GDP growth ≈ potential growth + change in the output gap (annual averages)
+    bq = base.copy()
+    bq.index = pd.PeriodIndex(bq.index, freq="Q")
+
+    def yavg(col, y):
+        return float(bq[col].loc[f"{y}Q1":f"{y}Q4"].mean())
+
+    def ygrowth(col, y):
+        import numpy as np
+        lv = np.exp(bq[col] / 100)
+        return float((lv.loc[f"{y}Q1":f"{y}Q4"].mean() / lv.loc[f"{y - 1}Q1":f"{y - 1}Q4"].mean() - 1) * 100)
+
+    vs = K["vs_nbu"]
     v = dict(
+        pot27=n(ygrowth("l_gdp_tnd", 2027)), pot28=n(ygrowth("l_gdp_tnd", 2028)), pot29=n(ygrowth("l_gdp_tnd", 2029)),
+        pot26=n(ygrowth("l_gdp_tnd", 2026)),
+        dgap27=n(yavg("l_gdp_gap", 2027) - yavg("l_gdp_gap", 2026), 1, True),
+        dgap28=n(yavg("l_gdp_gap", 2028) - yavg("l_gdp_gap", 2027), 1, True),
+        dgap29=n(yavg("l_gdp_gap", 2029) - yavg("l_gdp_gap", 2028), 1, True),
+        gap26=n(yavg("l_gdp_gap", 2026)), gap28=n(yavg("l_gdp_gap", 2028)),
+        rir27=n(yavg("rir_pol", 2027)), rirn27=n(yavg("rir_tnd", 2027)),
+        gdp29=n(A["2029"]["Реальний ВВП, % (рік)"]), gdp27_16=n(PO["Утримати 16%"]["ВВП 2027, %"]),
+        nbu_r27=n(vs["2027"]["Ставка IV кв., НБУ липень"]), nbu_r28=n(vs["2028"]["Ставка IV кв., НБУ липень"]),
+        r27x=n(Q["2027Q4"]["ir_pol"]),
         date=date.today(), rate=n(cfg.RECOMMENDATION["rate"], 0 if cfg.RECOMMENDATION["rate"] % 1 == 0 else 1), last_year=cfg.LAST_FORE[:4], target_year=target_q[:4],
         target_q=f"{roman[target_q[-1]]} кв. {target_q[:4]}", dec=n(K["nowcast_dec_yoy"]),
         opt_lt=n(OP["λ = 1, без реакції на адмінціни"]["2026Q4"]), opt_l2=n(OP["λ = 2"]["2026Q4"]), opt_l1=n(OP["λ = 1"]["2026Q4"]),
