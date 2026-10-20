@@ -39,7 +39,7 @@ def assumptions():
     L.append("## 1. Короткостроковий прогноз (наукаст)\n")
     L.append(f"- ІСЦ на місяці без даних: тренд (SA, середнє за {cfg.CPI_NOWCAST['trend_window']} міс.) + сезонний фактор "
              f"(середнє за {cfg.CPI_NOWCAST['seasonal_years']} років) + поправка {n(cfg.CPI_NOWCAST['adjustment'])} в. п./міс. "
-             "(велика пропозиція продовольства, мораторій на тарифи ЖКП, охолодження попиту).")
+             "(частина вересневого стрибка — разові ефекти пального й руйнувань логістики; мораторій на тарифи ЖКП).")
     nc = pd.read_csv(TAB / "cpi_nowcast.csv", index_col=0, encoding="utf-8-sig")
     L.append("\n" + md_table(nc, lambda v: n(v, 2) if isinstance(v, float) else str(v)) + "\n")
     L.append(f"- ІСЦ IV кв. 2026 фіксується на рівні наукасту (через шок витрат): {', '.join(cfg.CPI_NOWCAST_CONDITION)}.")
@@ -104,6 +104,16 @@ def summary():
     (DOCS / "forecast_summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
+def _base_effect(nc):
+    """'у жовтні–грудні 2025 ціни зросли лише на 1,5%' — the same months a year earlier."""
+    cpi = pd.read_csv(ROOT / "data" / "overview" / "cpi.csv", index_col=0, encoding="utf-8-sig")
+    base = [str(pd.Period(m, "M") - 12) for m in nc.index]
+    names = {"01": "січні", "02": "лютому", "03": "березні", "04": "квітні", "05": "травні", "06": "червні", "07": "липні",
+             "08": "серпні", "09": "вересні", "10": "жовтні", "11": "листопаді", "12": "грудні"}
+    growth = (pd.Series([1 + cpi.loc[m, "cpi_mom"] / 100 for m in base]).prod() - 1) * 100
+    return f"у {names[base[0][-2:]]}–{names[base[-1][-2:]]} {base[0][:4]} ціни зросли лише на {n(growth)}%"
+
+
 def qa():
     """Q&A for the jury: the template's model numbers are filled from the latest results."""
     from qpm.nbu_files import read_ir_chart, read_nbu_forecast
@@ -135,12 +145,15 @@ def qa():
     fg, hw, oil, bs = (SC[k] for k in ("Дефіцит фінансування", "Важка зима", "Нафта $120", "Базовий"))
     res, resm = K["reserves_end2026"], K["reserves_months_imports_end2026"]
     v = dict(
-        date=date.today(), rate=n(cfg.RECOMMENDATION["rate"]), last_year=cfg.LAST_FORE[:4], target_year=target_q[:4],
+        date=date.today(), rate=n(cfg.RECOMMENDATION["rate"], 0 if cfg.RECOMMENDATION["rate"] % 1 == 0 else 1), last_year=cfg.LAST_FORE[:4], target_year=target_q[:4],
         target_q=f"{roman[target_q[-1]]} кв. {target_q[:4]}", dec=n(K["nowcast_dec_yoy"]),
         opt_lt=n(OP["λ = 1, без реакції на адмінціни"]["2026Q4"]), opt_l2=n(OP["λ = 2"]["2026Q4"]), opt_l1=n(OP["λ = 1"]["2026Q4"]),
-        loss_rec=n(PO[rec]["Втрати (інфляція² + 0,5·розрив²)"]), loss_17=n(PO["Підвищити до 17%"]["Втрати (інфляція² + 0,5·розрив²)"]),
+        loss_rec=n(PO[rec]["Втрати (інфляція² + 0,5·розрив²)"]),
         loss_16=n(PO["Утримати 16%"]["Втрати (інфляція² + 0,5·розрив²)"]),
-        gdp27_rec=n(PO[rec]["ВВП 2027, %"]), gdp27_17=n(PO["Підвищити до 17%"]["ВВП 2027, %"]),
+        loss_165=n(PO["Підвищити до 16,5%"]["Втрати (інфляція² + 0,5·розрив²)"]),
+        loss_175=n(PO["Підвищити до 17,5%"]["Втрати (інфляція² + 0,5·розрив²)"]),
+        cpi27_16=n(PO["Утримати 16%"]["ІСЦ IV кв. 2027"]),
+        gdp27_rec=n(PO[rec]["ВВП 2027, %"]), gdp27_175=n(PO["Підвищити до 17,5%"]["ВВП 2027, %"]),
         rir26=n(base.loc[K["first_forecast"], "rir_pol"]), rir_tnd26=n(base.loc[K["first_forecast"], "rir_tnd"]),
         r27=n(half(Q["2027Q4"]["ir_pol"])), r28=n(half(Q["2028Q4"]["ir_pol"])), r29=n(round(Q[cfg.LAST_FORE]["ir_pol"]), 0),
         gdp26=n(A["2026"]["Реальний ВВП, % (рік)"]), gdp27=n(A["2027"]["Реальний ВВП, % (рік)"]), gdp28=n(A["2028"]["Реальний ВВП, % (рік)"]),
@@ -150,6 +163,7 @@ def qa():
         nbu_cpi27=n(nbu_v("ІСЦ (на кінець", "2027Q4")), nbu_core27=n(nbu_v("Базова інфляція", "2027Q4")),
         nbu_core28=n(nbu_v("Базова інфляція", "2028Q4")), rule29=n(K["rule_after_hold"]["2029Q4"]),
         nc_trend=n(nc["Тренд (SA)"].iloc[-1], 2),
+        base_effect=_base_effect(nc),
         nc_months=", ".join(f"{months[i[-2:]]} {n(r['ІСЦ м/м, прогноз'], 2)}%" for i, r in nc.iterrows()),
         eur26=n(Q[K["first_forecast"]]["uah_eur"]), eur29=n(Q[cfg.LAST_FORE]["uah_eur"]),
         bt_model=f"{n(bt['model'].min())}–{n(bt['model'].max())}", bt_naive=f"{n(bt['naive'].min())}–{n(bt['naive'].max())}",

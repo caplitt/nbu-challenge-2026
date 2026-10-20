@@ -114,6 +114,12 @@
 
 Джерела: [API НБУ](https://bank.gov.ua/ua/open-data/api-dev), [Стратегія НБУ (2023)](https://bank.gov.ua/ua/news/all/strategiya-pomyakshennya-valyutnih-obmejen-perehodu-do-bilshoyi-gnuchkosti-obminnogo-kursu-ta-povernennya-do-inflyatsiynogo-targetuvannya), [Interfax-Україна, 30.07.2026](https://interfax.com.ua/news/economic/1189290.html), [ECB staff projections](https://www.ecb.europa.eu/press/projections/html/index.en.html), [Brent понад $100](https://engineeringnews.co.za/print-version/oil-nears-100-as-fresh-middle-east-strikes-raise-supply-risks-2026-09-09).
 
+## Інфляція у вересні 2026 (зібрано 20 жовтня 2026)
+- ІСЦ 10,0% р/р, +2,1% м/м; базова 8,8% р/р (+2,0% м/м); «значно перевищила траєкторію прогнозу» НБУ — через атаки на виробничу, складську та логістичну інфраструктуру й подорожчання пального ([коментар НБУ](https://bank.gov.ua/ua/news/all/komentar-natsionalnogo-banku-schodo-rivnya-inflyatsiyi-u-veresni-2026-roku)).
+- Пальне +46,2% р/р; сирі продукти +6,7% (овочі борщового набору, яйця, менші врожаї); оброблені продукти +10,7%; непродовольчі товари +2,4%; послуги +13,7% (вища освіта, оренда); адміністративно регульовані ціни +13,6% (проїзд, вода, алкоголь).
+- Оновлений макропрогноз НБУ — 29.10.2026, Інфляційний звіт — 05.11.2026.
+- Ф'ючерси Brent (20.10.2026): ≈$109 у IV кв. 2026, ≈$87 наприкінці 2027, ≈$79 наприкінці 2028.
+
 ## Додаткові факти (зібрано 9 жовтня 2026)
 
 ### Рішення 17.09.2026 і дискусія КМП

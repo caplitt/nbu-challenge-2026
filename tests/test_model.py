@@ -114,7 +114,8 @@ def test_deck_numbers_come_from_model():
     fmt = [f"{Decimal(str(q[p]['d4l_cpi'])).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP):f}".replace(".", ",")
            for p in ("2026Q4", "2027Q4", "2028Q4", "2029Q4")]
     assert cpi_row[1:] == fmt
-    assert summary["cards"][0]["value"].startswith(f"{key['recommendation']['rate']:.1f}".replace(".", ","))
+    card_rate = float(summary["cards"][0]["value"].rstrip("%").replace(",", "."))
+    assert card_rate == pytest.approx(key["recommendation"]["rate"])
     assert key["baseline_quarterly"]["2026Q4"]["ir_pol"] == pytest.approx(key["recommendation"]["rate"], abs=1e-6)
 
 
