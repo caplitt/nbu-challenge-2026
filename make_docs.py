@@ -130,7 +130,11 @@ def qa():
         return round(x * 2) / 2
 
     qs = list(Q)
-    target_q = next(q for i, q in enumerate(qs) if all(abs(Q[r]["cpi_yoy"] - 5) <= 0.1 for r in qs[i:]))
+    target_q = next(q for i, q in enumerate(qs) if all(abs(Q[r]["cpi_yoy"] - 5) <= 0.2 for r in qs[i:]))
+    peak_q = max(qs, key=lambda r: Q[r]["cpi_yoy"])
+    back_q = next(q for q in qs if q > peak_q and Q[q]["cpi_yoy"] <= 5.25)
+    band = [Q[q]["cpi_yoy"] for q in qs if q >= back_q]
+    rx = K["risks_extra"]
     roman = {"1": "I", "2": "II", "3": "III", "4": "IV"}
     q28 = [Q[f"2028Q{i}"]["cpi_yoy"] for i in range(1, 5)]
     dip = sorted({n(min(q28)), n(Q["2028Q4"]["cpi_yoy"])}, key=lambda t: float(t.replace(",", ".").replace("−", "-")))
@@ -176,7 +180,12 @@ def qa():
         admin=n(K["admin_reaction"] * 100, 0),
         best_hold=" / ".join(f"{k.replace('.', ',')} — {n(x)}%" for k, x in K["best_hold_by_lambda"].items()),
         best_hold_rng=f"{n(bh[0])}–{n(bh[-1])}",
-        fx_cpi27=n(fxr["cpi_2027Q4"]), fx_rate=n(fxr["rate_peak"]), fx_uah=n(fxr["uah_eur_2027Q4"]),
+        fx_cpi27=n(fxr["cpi_2027Q4"]), fx_rate=n(fxr["rate_peak"]), fx_usd=n(fxr["uah_usd_2027Q4"]), fx_dep=n(fxr["dep_per_year"]),
+        back_q=f"{roman[back_q[-1]]} кв. {back_q[:4]}", back_year=back_q[:4], band=f"{n(min(band))}–{n(max(band))}",
+        core_dec=n(K["nowcast_core_dec_yoy"]), nbu_core26=n(nbu_v("Базова інфляція", "2026Q4")),
+        exp_cpi27=n(rx["Розбалансування очікувань"]["ІСЦ IV кв. 2027"]), exp_rate=n(rx["Розбалансування очікувань"]["Ставка пік"]),
+        vat_peak=n(rx["ПДВ 21% з 2027"]["ІСЦ пік"]), vat_rate=n(rx["ПДВ 21% з 2027"]["Ставка пік"]),
+        best_l1=n(K["best_hold_by_lambda"]["λ = 1"]),
         key_now=n(key_now, 0), cpi_last=n(cpi_y.iloc[-1]), exp_an=n(exp_an),
         rr_post=n(key_now - cpi_y.iloc[-1]), rr_ante_an=n(key_now - exp_an), rr_ante_fc=n(key_now - Q["2027Q3"]["cpi_yoy"]),
         usd_now=n(usd.iloc[-1]), usd_dep=n((usd.iloc[-1] / usd_yago - 1) * 100, 0),

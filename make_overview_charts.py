@@ -42,12 +42,14 @@ def expectations():
 def rates():
     r, cpi, e = overview.load("rates"), overview.load("cpi"), overview.load("expectations")
     real = (r["Облікова ставка"] - cpi["cpi_yoy"]).dropna()
+    # ex ante, as the NBU computes it: policy rate minus 12-month inflation expectations of financial analysts
+    exante = (r["Облікова ставка"] - e["Фінансові аналітики"].ffill()).dropna()
     fig, ax = pl.grid(1, 3, width=14, height=3.6)
     pl.monthly_panel(ax[0], {"Облікова ставка": r["Облікова ставка"],
                              "Строкові депозити ФО": r["Середьозважена ФО"],
                              "ІСЦ, р/р": cpi["cpi_yoy"]}, "Ставки та інфляція", "%", start=START)
-    pl.monthly_panel(ax[1], {"Облікова ставка мінус інфляція": real}, "Реальна облікова ставка (ex post)",
-                     "в. п.", target=0, start=START)
+    pl.monthly_panel(ax[1], {"Від очікувань аналітиків (як у НБУ)": exante, "Від фактичної інфляції": real},
+                     "Реальна облікова ставка", "в. п.", target=0, start=START)
     pl.monthly_panel(ax[2], {"Домогосподарства": e["Домогосподарства"], "Підприємства": e["Підприємства"],
                              "Банки": e["Банки"], "Фінансові аналітики": e["Фінансові аналітики"]},
                      "Інфляційні очікування на 12 міс.", "%", markers=True, start=START)

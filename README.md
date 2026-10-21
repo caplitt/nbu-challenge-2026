@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| Презентація | [`presentation/NBU_University_Challenge_2026.pptx`](presentation/NBU_University_Challenge_2026.pptx) (+ `.pdf`) — 36 слайдів з нотатками доповідача |
+| Презентація | [`presentation/NBU_University_Challenge_2026.pptx`](presentation/NBU_University_Challenge_2026.pptx) (+ `.pdf`) — 37 слайдів (основна частина — 18, решта — додатки) з нотатками доповідача |
 | Підсумки прогнозу | [`docs/forecast_summary.md`](docs/forecast_summary.md) |
 | Припущення і судження | [`docs/assumptions.md`](docs/assumptions.md) |
 | Обсяг роботи: дані, зміни моделі, судження, перевірки (з посиланнями) | [`docs/scope_of_work.md`](docs/scope_of_work.md) (+ Word: `docs/scope_of_work.docx`) |

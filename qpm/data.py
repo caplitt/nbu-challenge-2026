@@ -70,11 +70,13 @@ def hp_gap(s: pd.Series, lamb: float = 1600) -> pd.Series:
     return out
 
 
-def read_data(data_dir="data", cpi_nowcast: dict | None = None, gdp_nowcast: dict | None = None) -> pd.DataFrame:
+def read_data(data_dir="data", cpi_nowcast: dict | None = None, gdp_nowcast: dict | None = None,
+              core_nowcast: dict | None = None) -> pd.DataFrame:
     """Return the quarterly databank `dq` as a01_read_data.m builds it.
 
     cpi_nowcast: {"2026-09": m-o-m %, ...} fills months without data (actual data always wins).
     gdp_nowcast: {"2026Q3": q-o-q % SA, ...} fills quarters without GDP data.
+    core_nowcast: {"2026-10": m-o-m %, ...} — the same for core CPI.
     """
     data_dir = Path(data_dir)
     dm, _ = read_iris_csv(data_dir / "monthly.csv")
@@ -88,6 +90,12 @@ def read_data(data_dir="data", cpi_nowcast: dict | None = None, gdp_nowcast: dic
         if pd.isna(dm.loc[p, "D_CPI_su_m"]):
             dm.loc[p, "D_CPI_su_m"] = v
             nowcast_months.append(p)
+    for m, v in (core_nowcast or {}).items():
+        p = pd.Period(m, "M")
+        if p not in dm.index:
+            dm.loc[p] = np.nan
+        if pd.isna(dm.loc[p, "D_CPI_C_su_m"]):
+            dm.loc[p, "D_CPI_C_su_m"] = v
     dm = dm.sort_index()
     for qtr, v in (gdp_nowcast or {}).items():
         p = pd.Period(qtr, "Q")

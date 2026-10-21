@@ -14,9 +14,10 @@ from .data import read_iris_csv
 
 
 def cpi_nowcast(until: str, data_dir="data", trend_window=3, seasonal_years=5, adjustment=0.0,
-                start="2010-01") -> pd.DataFrame:
+                start="2010-01", series="D_CPI_su_m") -> pd.DataFrame:
+    """series: D_CPI_su_m (headline) or D_CPI_C_su_m (core) — the same method for both."""
     dm, _ = read_iris_csv(f"{data_dir}/monthly.csv")
-    x = dm["D_CPI_su_m"].dropna().loc[start:]
+    x = dm[series].dropna().loc[start:]
     lvl = np.log((1 + x / 100).cumprod())
     res = STL(lvl.values, period=12, robust=True).fit()
     seas = pd.Series(res.seasonal, index=lvl.index)

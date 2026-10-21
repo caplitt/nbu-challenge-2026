@@ -38,6 +38,8 @@ def main():
     ctx["filt"].vars.to_csv(TAB / "filter.csv")
     if ctx["nowcast"] is not None:
         ctx["nowcast"].to_csv(TAB / "cpi_nowcast.csv", encoding="utf-8-sig")
+    if ctx.get("nowcast_core") is not None:
+        ctx["nowcast_core"].to_csv(TAB / "core_nowcast.csv", encoding="utf-8-sig")
 
     # ------------------------------------------------------------- scenarios and policy options
     base_plan = pipeline.base_plan(ctx)
@@ -45,19 +47,38 @@ def main():
     scen = {name: pipeline.run(ctx, plan) for name, plan in pipeline.scenario_plans(ctx).items()}
     base = scen["Базовий"]
     rule = pipeline.run(ctx, pipeline.with_rate_path(base_plan, cfg.RECOMMENDED_RATE_PATH))
-    # FX risk: the hryvnia weakens as the market expects (≈5% a year, analysts' 12-month expectations) instead of the
-    # model's ≈1% — the rest of the economy reacts, the rule reacts around the baseline rate path
+    # UAH/USD for reporting (the model works with UAH/EUR): EUR/USD — NBU assumptions, flat after their horizon
+    usd_eur = ctx["dq"]["USD_EUR"].ffill()
+    for df in (*scen.values(), rule):
+        df["uah_usd"] = df["uah_eur"] / usd_eur.reindex(df.index).ffill()
+
+    # risk runs on top of the baseline (the rule reacts around the baseline rate path, as in the scenarios):
+    # the hryvnia weakens as the market expects; de-anchored expectations (stickier core inflation); VAT 20 -> 21%
     around = pipeline.rate_path_to_shock(ctx, pipeline.nowcast_to_shock(ctx, pipeline.policy_plan(ctx, base_plan,
                                          cfg.RECOMMENDED_RATE_PATH)), keep=[str(f)])
+    fxe = read_ir_chart("3.12")["Фінансові аналітики"].dropna()
+    usd_now = float(base.loc[f - 1, "uah_usd"])
+    dep = float(fxe.iloc[-1]) / usd_now - 1                       # a year ahead, analysts (NBU survey)
     fx_per = pd.period_range(f, "2027Q4", freq="Q")
-    l_er0 = float(base.loc[f - 1, "l_er"])
     fx_plan = around.copy()
-    fx_plan.exogenize("l_er", fx_per, [l_er0 + 100 * np.log(1.05) * (k + 1) / 4 for k in range(len(fx_per))])
+    fx_plan.exogenize("l_er", fx_per, [100 * np.log(usd_now * (1 + dep) ** ((k + 1) / 4) * float(usd_eur.reindex([q]).ffill().iloc[0]
+                                       if q in usd_eur.index else usd_eur.iloc[-1])) for k, q in enumerate(fx_per)])
     fx_plan.endogenize("res_l_er_uip", fx_per)
-    fx_run = pipeline.run(ctx, fx_plan)
-    fx_risk = {"cpi_2027Q4": _q(fx_run, "cpi_yoy", "2027Q4"), "cpi_peak": float(fx_run.loc[fc, "cpi_yoy"].max().round(2)),
-               "rate_peak": float(fx_run.loc[fc, "ir_pol"].max().round(2)), "uah_eur_2027Q4": _q(fx_run, "uah_eur", "2027Q4")}
-    print("Ризик: курс як чекає ринок:", fx_risk)
+    exp_plan = around.copy()
+    exp_plan.shock("res_dl_cpi_c", list(pd.period_range("2027Q1", "2027Q4", freq="Q")), [1.0] * 4)
+    vat_plan = around.copy()
+    vat_plan.shock("res_dl_cpi_c", [pd.Period("2027Q1", "Q")], [0.8])   # calibrated: +0.54 pp to CPI y/y (NBU: 0.4-0.7 pp)
+    risks = {}
+    for name, rp in (("Курс як чекає ринок", fx_plan), ("Розбалансування очікувань", exp_plan), ("ПДВ 21% з 2027", vat_plan)):
+        rr = pipeline.run(ctx, rp)
+        rr["uah_usd"] = rr["uah_eur"] / usd_eur.reindex(rr.index).ffill()
+        risks[name] = {"ІСЦ IV кв. 2027": _q(rr, "cpi_yoy", "2027Q4"), "ІСЦ пік": float(rr.loc[fc, "cpi_yoy"].max().round(2)),
+                       "Базова IV кв. 2027": _q(rr, "core_yoy", "2027Q4"), "Ставка пік": float(rr.loc[fc, "ir_pol"].max().round(2)),
+                       "Курс IV кв. 2027, грн/$": _q(rr, "uah_usd", "2027Q4")}
+    fx_risk = {"cpi_2027Q4": risks["Курс як чекає ринок"]["ІСЦ IV кв. 2027"], "rate_peak": risks["Курс як чекає ринок"]["Ставка пік"],
+               "uah_usd_2027Q4": risks["Курс як чекає ринок"]["Курс IV кв. 2027, грн/$"], "dep_per_year": round(dep * 100, 1)}
+    pd.DataFrame(risks).T.to_csv(TAB / "risks_extra.csv", encoding="utf-8-sig")
+    print("Додаткові ризики:", risks)
     print("Базовий vs чисте правило після утримання, ІСЦ IV кв. 2028 / 2029:",
           [round(float(d.loc[q, "cpi_yoy"]), 2) for d in (base, rule) for q in ("2028Q4", "2029Q4")])
     # policy reacts to first-round administered prices only partly (cfg.ADMIN_REACTION): the same principle for the
@@ -127,6 +148,7 @@ def main():
                "ІСЦ IV кв. 2027": _q(df, "cpi_yoy", "2027Q4"), "ІСЦ IV кв. 2029": _q(df, "cpi_yoy", "2029Q4"),
                "Ставка пік": float(df.loc[fc, "ir_pol"].max().round(2)),
                "Ставка IV кв. 2027": _q(df, "ir_pol", "2027Q4"), "Курс IV кв. 2027, грн/€": _q(df, "uah_eur", "2027Q4"),
+               "Курс IV кв. 2027, грн/$": _q(df, "uah_usd", "2027Q4"),
                "ВВП 2027, % (рік)": float(pipeline.annual_table(df).loc["Реальний ВВП, % (рік)", 2027])}
         for name, df in scen.items()}).T
     scen_tab.to_csv(TAB / "scenarios.csv", encoding="utf-8-sig")
@@ -177,13 +199,14 @@ def main():
     key = {
         "data_cutoff": cfg.LAST_HIST, "first_forecast": str(f),
         "nowcast_dec_yoy": float(nc["ІСЦ р/р, прогноз"].iloc[-1]) if nc is not None else None,
+        "nowcast_core_dec_yoy": float(ctx["nowcast_core"]["ІСЦ р/р, прогноз"].iloc[-1]) if ctx.get("nowcast_core") is not None else None,
         "nowcast_months": [str(p) for p in nc.index] if nc is not None else [],
         "baseline_quarterly": {str(p): {c: float(round(base.loc[p, c], 2)) for c in
-                                        ("cpi_yoy", "core_yoy", "ir_pol", "uah_eur", "gdp_yoy", "l_gdp_gap", "rir_pol", "rir_tnd")}
+                                        ("cpi_yoy", "core_yoy", "ir_pol", "uah_eur", "uah_usd", "gdp_yoy", "l_gdp_gap", "rir_pol", "rir_tnd")}
                                for p in fc},
         "real_rate_last_hist": {c: float(round(base.loc[f - 1, c], 2)) for c in ("rir_pol", "rir_tnd")},
         "best_option_by_lambda": best_option,
-        "fx_risk": fx_risk,
+        "fx_risk": fx_risk, "risks_extra": risks,
         "best_hold_by_lambda": best_hold, "admin_reaction": cfg.ADMIN_REACTION,
         "brent_path": {q: round(float(ctx["dq"].loc[pd.Period(q, "Q"), "BRENT_USD"]), 1) for q in ("2026Q4", "2027Q4", "2028Q4")},
         "baseline_annual": {str(y): {k: float(v) for k, v in annual[y].items()} for y in annual.columns},

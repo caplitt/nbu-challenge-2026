@@ -19,8 +19,12 @@ def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
     """Read data (+ nowcasts), add tunes, build model, run the Kalman smoother."""
     last_hist = last_hist or cfg.LAST_HIST
     nc = cpi_nowcast(data_dir=cfg.DATA_DIR, **cfg.CPI_NOWCAST) if use_nowcast and getattr(cfg, "CPI_NOWCAST", None) else None
+    # core CPI nowcast by the same method: otherwise the whole near-term surprise would be attributed to non-core prices
+    ncc = (cpi_nowcast(data_dir=cfg.DATA_DIR, series="D_CPI_C_su_m", **cfg.CPI_NOWCAST)
+           if nc is not None and getattr(cfg, "CORE_NOWCAST", False) else None)
     dq = read_data(cfg.DATA_DIR, as_dict(nc) if nc is not None else None,
-                   getattr(cfg, "GDP_NOWCAST", None) if use_nowcast else None)
+                   getattr(cfg, "GDP_NOWCAST", None) if use_nowcast else None,
+                   as_dict(ncc) if ncc is not None else None)
     dq["L_GDP_GAP"] = np.nan
     for per, val in cfg.GDP_GAP_TUNES.items():
         dq.loc[pd.Period(per, "Q"), "L_GDP_GAP"] = val
@@ -36,7 +40,7 @@ def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
             ser.loc[pd.Period(a, "Q"):pd.Period(b, "Q")] = v
         std[shock] = ser
     filt = kalman_smoother(model, obs, rngfilt, std)
-    return dict(dq=dq, model=model, filt=filt, rngfilt=rngfilt, nowcast=nc, cfg=cfg,
+    return dict(dq=dq, model=model, filt=filt, rngfilt=rngfilt, nowcast=nc, nowcast_core=ncc, cfg=cfg,
                 hist=pd.period_range(cfg.FIRST_HIST, last_hist, freq="Q"),
                 rngfcast=pd.period_range(pd.Period(last_hist, "Q") + 1, cfg.LAST_FORE, freq="Q"))
 
@@ -58,7 +62,10 @@ def base_plan(ctx, judgments: bool = True, look_through: bool | float = False) -
             p = pd.Period(q, "Q")
             if p in fc and not pd.isna(ctx["dq"].loc[p, "L_CPI"]):
                 plan.exogenize("l_cpi", [p], [ctx["dq"].loc[p, "L_CPI"]])
-                plan.endogenize("res_dl_rnc", [p])   # near-term surprises are mostly non-core (food, fuel, tariffs)
+                plan.endogenize("res_dl_rnc", [p])   # headline − core = non-core relative prices (food, fuel, tariffs)
+                if ctx.get("nowcast_core") is not None and not pd.isna(ctx["dq"].loc[p, "L_CPI_C"]):
+                    plan.exogenize("l_cpi_c", [p], [ctx["dq"].loc[p, "L_CPI_C"]])
+                    plan.endogenize("res_dl_cpi_c", [p])
     if judgments:
         fx = {pd.Period(k, "Q"): v for k, v in getattr(cfg, "FX_TARGET_PATH", {}).items() if pd.Period(k, "Q") in fc}
         if fx:
@@ -150,10 +157,13 @@ def nowcast_to_shock(ctx, plan: Plan) -> Plan:
         return plan
     implied = run(ctx, plan).attrs["shocks"]
     out = plan.copy()
-    for per in cond:
-        out.exo["l_cpi"].pop(per)
-        out.endo["res_dl_rnc"].discard(per)
-        out.shocks.setdefault("res_dl_rnc", {})[per] = float(implied.loc[per, "res_dl_rnc"])  # total, not added
+    for var, shock in (("l_cpi", "res_dl_rnc"), ("l_cpi_c", "res_dl_cpi_c")):
+        for per in list(out.exo.get(var, {})):
+            if per not in cond:
+                continue
+            out.exo[var].pop(per)
+            out.endo[shock].discard(per)
+            out.shocks.setdefault(shock, {})[per] = float(implied.loc[per, shock])  # total, not added
     out.exo = {k: v for k, v in out.exo.items() if v}
     out.endo = {k: v for k, v in out.endo.items() if v}
     return out
@@ -188,7 +198,7 @@ def add_reporting(df: pd.DataFrame) -> pd.DataFrame:
 
 
 LABELS = {"cpi_yoy": "ІСЦ, % р/р (сер. за кв.)", "core_yoy": "Базова інфляція, % р/р", "gdp_yoy": "ВВП, % р/р", "ir_pol": "Облікова ставка, % (сер. за кв.)",
-          "uah_eur": "Курс, грн/€ (сер. за кв.)", "l_gdp_gap": "Розрив ВВП, %"}
+          "uah_eur": "Курс, грн/€ (сер. за кв.)", "uah_usd": "Курс, грн/$ (сер. за кв.)", "l_gdp_gap": "Розрив ВВП, %"}
 
 
 def summary_table(results: dict[str, pd.DataFrame], periods) -> pd.DataFrame:
@@ -196,7 +206,8 @@ def summary_table(results: dict[str, pd.DataFrame], periods) -> pd.DataFrame:
     rows = {}
     for name, df in results.items():
         for col, lab in LABELS.items():
-            rows[(name, lab)] = df[col].reindex(periods)
+            if col in df:
+                rows[(name, lab)] = df[col].reindex(periods)
     t = pd.DataFrame(rows).T
     t.columns = [str(p) for p in periods]
     return t.round(2)
@@ -212,7 +223,7 @@ def annual_table(df: pd.DataFrame, years=(2025, 2026, 2027, 2028, 2029)) -> pd.D
         out[y] = {"ІСЦ, % р/р (IV кв.)": df.loc[q4, "cpi_yoy"], "Базова інфляція, % р/р (IV кв.)": df.loc[q4, "core_yoy"],
                   "Реальний ВВП, % (рік)": gdp,
                   "Облікова ставка, % (IV кв.)": df.loc[q4, "ir_pol"], "Курс, грн/€ (IV кв.)": df.loc[q4, "uah_eur"]}
-    return pd.DataFrame(out).round(1)
+    return pd.DataFrame(out).round(2)
 
 
 def rate_decomposition(df: pd.DataFrame, params: dict) -> pd.DataFrame:

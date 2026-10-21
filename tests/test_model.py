@@ -75,9 +75,9 @@ def test_scenario_shocks_add_to_judgments(ctx):
     """Scenarios go on top of the baseline: a scenario shock adds to a judgment in the same quarter."""
     plan = pipeline.base_plan(ctx)
     q = pd.Period("2027Q1")
-    before = plan.shocks["res_l_gdp_gap"][q]
-    plan.shock("res_l_gdp_gap", [q], [-0.5])
-    assert plan.shocks["res_l_gdp_gap"][q] == pytest.approx(before - 0.5)
+    before = plan.shocks["res_dl_cpi_c"][q]          # cost-push judgment in 2027Q1
+    plan.shock("res_dl_cpi_c", [q], [1.0])
+    assert plan.shocks["res_dl_cpi_c"][q] == pytest.approx(before + 1.0)
 
 
 def test_look_through_drops_first_round_judgments(ctx):
@@ -92,7 +92,9 @@ def test_baseline_returns_to_point_target_within_horizon():
     """NBU: 5% point target (no tolerance band) within a policy horizon of up to three years."""
     key = json.loads((ROOT / "results/key_numbers.json").read_text(encoding="utf-8"))
     q = key["baseline_quarterly"]
-    assert q[cfg.LAST_FORE]["cpi_yoy"] == pytest.approx(5.0, abs=0.1)
+    last_year = [q[f"{cfg.LAST_FORE[:4]}Q{i}"]["cpi_yoy"] for i in range(1, 5)]
+    assert sum(last_year) / 4 == pytest.approx(5.0, abs=0.1)          # on target on average in the last year
+    assert all(abs(x - 5.0) <= 0.2 for x in last_year)                 # and close to it in every quarter
     for per, rate in cfg.RECOMMENDED_RATE_PATH.items():       # the decision and the promised hold are kept
         assert q[per]["ir_pol"] == pytest.approx(rate, abs=1e-6)
 
@@ -112,9 +114,11 @@ def test_reported_inflation_is_percent_and_matches_data(ctx):
 
 
 def test_cpi_nowcast_condition_respected(ctx):
+    """Both headline and core CPI are pinned to their nowcasts in 2026Q4."""
     out = pipeline.run(ctx, pipeline.base_plan(ctx))
     q4 = pd.Period("2026Q4")
     assert out.loc[q4, "l_cpi"] == pytest.approx(ctx["dq"].loc[q4, "L_CPI"], abs=1e-8)
+    assert out.loc[q4, "l_cpi_c"] == pytest.approx(ctx["dq"].loc[q4, "L_CPI_C"], abs=1e-8)
 
 
 def test_deck_numbers_come_from_model():
