@@ -186,6 +186,13 @@ def qa():
         exp_cpi27=n(rx["Розбалансування очікувань"]["ІСЦ IV кв. 2027"]), exp_rate=n(rx["Розбалансування очікувань"]["Ставка пік"]),
         vat_peak=n(rx["ПДВ 21% з 2027"]["ІСЦ пік"]), vat_rate=n(rx["ПДВ 21% з 2027"]["Ставка пік"]),
         best_l1=n(K["best_hold_by_lambda"]["λ = 1"]),
+        rob_E1=n(K["robust"]["summary"]["λ = 1"]["best_E"]["P1"]), rob_E2=n(K["robust"]["summary"]["λ = 1"]["best_E"]["P2"]),
+        rob_reg=n(K["robust"]["summary"]["λ = 1"]["best_regret"]),
+        rob_e17=n(K["robust"]["summary"]["λ = 1"]["E"]["P1"]["17.0"]), rob_e165=n(K["robust"]["summary"]["λ = 1"]["E"]["P1"]["16.5"]),
+        rob_e175=n(K["robust"]["summary"]["λ = 1"]["E"]["P1"]["17.5"]),
+        opt_l1_q1=n(OP["λ = 1"]["2027Q1"]),
+        fx_half=n((K["robust"]["losses"]["cpi27"]["Курс як чекає ринок"]["16.5"]
+                   - K["robust"]["losses"]["cpi27"]["Курс як чекає ринок"]["17.5"]) / 2),
         key_now=n(key_now, 0), cpi_last=n(cpi_y.iloc[-1]), exp_an=n(exp_an),
         rr_post=n(key_now - cpi_y.iloc[-1]), rr_ante_an=n(key_now - exp_an), rr_ante_fc=n(key_now - Q["2027Q3"]["cpi_yoy"]),
         usd_now=n(usd.iloc[-1]), usd_dep=n((usd.iloc[-1] / usd_yago - 1) * 100, 0),

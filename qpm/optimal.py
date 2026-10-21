@@ -22,7 +22,14 @@ def optimal_path(ctx, plan: Plan, w_gap=0.5, w_smooth=0.5, fixed: dict | None = 
                  last_from: str | None = None, landing_plan: Plan | None = None):
     """landing_plan: from `last_from` on, inflation and the gap are taken from this plan instead of `plan` — e.g. the
     path reacts to first-round administered prices only partly while they happen (`plan`), but the landing on the
-    target at the end of the horizon is judged on actual inflation (`landing_plan`, all judgments in full)."""
+    target at the end of the horizon is judged on actual inflation (`landing_plan`, all judgments in full).
+
+    The CPI nowcast enters as fixed shocks (implied once, under the rule): if it stayed an exogenised value, every
+    alternative rate path would imply its own cost-push shock in 2026Q4 — the higher the rate, the bigger the shock —
+    and that shock would carry over into 2027, biasing the optimum against higher rates."""
+    plan = pipeline.nowcast_to_shock(ctx, plan)
+    if landing_plan is not None:
+        landing_plan = pipeline.nowcast_to_shock(ctx, landing_plan)
     fc = ctx["rngfcast"]
     target = ctx["model"].params["dl_cpi_tar"]
     fixed = {pd.Period(k, "Q"): float(v) for k, v in (fixed or {}).items()}
@@ -53,7 +60,8 @@ def optimal_path(ctx, plan: Plan, w_gap=0.5, w_smooth=0.5, fixed: dict | None = 
         pi0[land] = (y0l["d4l_cpi"].reindex(fc).values - M_pi @ x0)[land]
         gap0[land] = (y0l["l_gdp_gap"].reindex(fc).values - M_gap @ x0)[land]
     w = np.where(land, w_last, 1.0)
-    i_prev = float(base_rule.loc[ctrl[0] - 1, "ir_pol"])
+    # the change is measured from the rate in force (not from the quarterly average that includes earlier decisions)
+    i_prev = float(ctx.get("rate_now", base_rule.loc[ctrl[0] - 1, "ir_pol"])) if not fixed else float(base_rule.loc[ctrl[0] - 1, "ir_pol"])
     D = np.eye(n) - np.eye(n, k=-1)
     d0 = np.zeros(n)
     d0[0] = -i_prev
@@ -86,5 +94,6 @@ def policy_loss(ctx, df: pd.DataFrame, w_gap=0.5, w_smooth=0.5, w_last=1.0, last
     if df_land is not None:
         pi[land] = df_land["d4l_cpi"].reindex(fc).values[land]
         gap[land] = df_land["l_gdp_gap"].reindex(fc).values[land]
-    di = np.diff(np.concatenate([[float(ctx["filt"].vars.loc[fc[0] - 1, "ir_pol"])], i]))
+    i_now = float(ctx.get("rate_now", ctx["filt"].vars.loc[fc[0] - 1, "ir_pol"]))   # the rate in force now
+    di = np.diff(np.concatenate([[i_now], i]))
     return float((w * (pi - target) ** 2).sum() + w_gap * (gap ** 2).sum() + w_smooth * (di ** 2).sum())

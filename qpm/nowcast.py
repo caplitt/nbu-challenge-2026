@@ -19,7 +19,9 @@ def cpi_nowcast(until: str, data_dir="data", trend_window=3, seasonal_years=5, a
     dm, _ = read_iris_csv(f"{data_dir}/monthly.csv")
     x = dm[series].dropna().loc[start:]
     lvl = np.log((1 + x / 100).cumprod())
-    res = STL(lvl.values, period=12, robust=True).fit()
+    # not robust — as everywhere else (qpm.data.seasonal_adjust): robust STL treats the 2022 shock as outliers and
+    # gave implausible December factors (+0.6 pp headline, −0.6 pp core)
+    res = STL(lvl.values, period=12, robust=False).fit()
     seas = pd.Series(res.seasonal, index=lvl.index)
     sf = seas.diff() * 100
     factor = sf.groupby(sf.index.month).apply(lambda s: s.iloc[-seasonal_years:].mean())

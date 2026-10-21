@@ -54,23 +54,46 @@ def main():
 
     # risk runs on top of the baseline (the rule reacts around the baseline rate path, as in the scenarios):
     # the hryvnia weakens as the market expects; de-anchored expectations (stickier core inflation); VAT 20 -> 21%
-    around = pipeline.rate_path_to_shock(ctx, pipeline.nowcast_to_shock(ctx, pipeline.policy_plan(ctx, base_plan,
-                                         cfg.RECOMMENDED_RATE_PATH)), keep=[str(f)])
+    rec_plan = pipeline.policy_plan(ctx, base_plan, cfg.RECOMMENDED_RATE_PATH)
+    around = pipeline.rate_path_to_shock(ctx, pipeline.nowcast_to_shock(ctx, rec_plan), keep=[str(f)])
     fxe = read_ir_chart("3.12")["Фінансові аналітики"].dropna()
     usd_now = float(base.loc[f - 1, "uah_usd"])
     dep = float(fxe.iloc[-1]) / usd_now - 1                       # a year ahead, analysts (NBU survey)
     fx_per = pd.period_range(f, "2027Q4", freq="Q")
-    fx_plan = around.copy()
-    fx_plan.exogenize("l_er", fx_per, [100 * np.log(usd_now * (1 + dep) ** ((k + 1) / 4) * float(usd_eur.reindex([q]).ffill().iloc[0]
-                                       if q in usd_eur.index else usd_eur.iloc[-1])) for k, q in enumerate(fx_per)])
-    fx_plan.endogenize("res_l_er_uip", fx_per)
-    exp_plan = around.copy()
-    exp_plan.shock("res_dl_cpi_c", list(pd.period_range("2027Q1", "2027Q4", freq="Q")), [1.0] * 4)
-    vat_plan = around.copy()
-    vat_plan.shock("res_dl_cpi_c", [pd.Period("2027Q1", "Q")], [0.8])   # calibrated: +0.54 pp to CPI y/y (NBU: 0.4-0.7 pp)
+    fx_path = [100 * np.log(usd_now * (1 + dep) ** ((k + 1) / 4) * float(usd_eur.reindex([q]).ffill().iloc[0]))
+               for k, q in enumerate(fx_per)]
+    # the FX risk is the UIP shock that produces the market path under the recommended decision; it then enters as a
+    # shock, so the hryvnia still responds to the policy rate (with a fixed path the decision would hardly matter)
+    _fxp = around.copy()
+    _fxp.exogenize("l_er", fx_per, fx_path)
+    _fxp.endogenize("res_l_er_uip", fx_per)
+    uip_fx = pipeline.run(ctx, _fxp).attrs["shocks"]["res_l_er_uip"].reindex(fx_per)
+
+    def sc_fx(plan, f_, ctx_=None):
+        plan.shock("res_l_er_uip", list(fx_per), list(uip_fx.values))
+        return plan
+
+    def sc_exp(plan, f_, ctx_=None):       # de-anchored expectations: core +1 pp (q/q annualised) every quarter of 2027
+        plan.shock("res_dl_cpi_c", list(pd.period_range("2027Q1", "2027Q4", freq="Q")), [1.0] * 4)
+        return plan
+
+    def sc_vat(plan, f_, ctx_=None):       # VAT 21%: calibrated to +0.54 pp on CPI y/y (NBU: 0.4-0.7 pp)
+        plan.shock("res_dl_cpi_c", [pd.Period("2027Q1", "Q")], [0.8])
+        return plan
+
+    def sc_weak(plan, f_, ctx_=None):      # counterweight: demand weaker than assumed (attacks, fiscal consolidation)
+        plan.shock("res_l_gdp_gap", [f_ + 1, f_ + 2, f_ + 3, f_ + 4], [-0.7, -0.7, -0.5, -0.3])
+        return plan
+
+    def sc_core_down(plan, f_, ctx_=None):  # counterweight: September largely one-off, core slows in Q4-Q1
+        plan.shock("res_dl_cpi_c", [f_, f_ + 1], [-1.5, -0.75])
+        return plan
+
+    RISKS = {"Курс як чекає ринок": sc_fx, "Розбалансування очікувань": sc_exp, "ПДВ 21% з 2027": sc_vat}
+    COUNTER = {"Слабкий попит": sc_weak, "Базова сповільнюється": sc_core_down}
     risks = {}
-    for name, rp in (("Курс як чекає ринок", fx_plan), ("Розбалансування очікувань", exp_plan), ("ПДВ 21% з 2027", vat_plan)):
-        rr = pipeline.run(ctx, rp)
+    for name, fn in RISKS.items():
+        rr = pipeline.run(ctx, fn(around.copy(), f, ctx))
         rr["uah_usd"] = rr["uah_eur"] / usd_eur.reindex(rr.index).ffill()
         risks[name] = {"ІСЦ IV кв. 2027": _q(rr, "cpi_yoy", "2027Q4"), "ІСЦ пік": float(rr.loc[fc, "cpi_yoy"].max().round(2)),
                        "Базова IV кв. 2027": _q(rr, "core_yoy", "2027Q4"), "Ставка пік": float(rr.loc[fc, "ir_pol"].max().round(2)),
@@ -84,10 +107,16 @@ def main():
     # policy reacts to first-round administered prices only partly (cfg.ADMIN_REACTION): the same principle for the
     # decision, the path after the hold and the losses; the forecast itself keeps all judgments in full
     react = pipeline.reaction_plan(ctx)
+    # for comparing rate paths the nowcast enters as fixed shocks (as in optimal.optimal_path)
+    react_s, base_s = pipeline.nowcast_to_shock(ctx, react), pipeline.nowcast_to_shock(ctx, base_plan)
 
     def react_run(plan):
         """The same rate path, inflation measured as policy sees it (first round of admin prices partly netted out)."""
-        return pipeline.run(ctx, pipeline.with_rate_path(react, {str(k): float(v) for k, v in plan.exo["ir_pol"].items()}))
+        return pipeline.run(ctx, pipeline.with_rate_path(react_s, {str(k): float(v) for k, v in plan.exo["ir_pol"].items()}))
+
+    def land_run(plan):
+        """The same rate path, all judgments in full — for the landing quarters of the loss."""
+        return pipeline.run(ctx, pipeline.with_rate_path(base_s, {str(k): float(v) for k, v in plan.exo["ir_pol"].items()}))
 
     pol_plans = {name: pipeline.policy_plan(ctx, base_plan, path) for name, path in cfg.POLICY_OPTIONS.items()}
     # optimal rate path from the October decision on (min of quadratic loss), sensitivity to the smoothing weight
@@ -120,18 +149,56 @@ def main():
     # over the whole horizon, on inflation as policy sees it — higher rates cut inflation faster but need sharper rate
     # moves; the smoothing weight is a preference, so the best option is reported for each weight
     pol_react = {name: react_run(plan) for name, plan in pol_plans.items()}
-    loss_w = {ws: {name: optimal.policy_loss(ctx, df, df_land=pol[name], **{**cfg.TARGET_PATH, "w_smooth": ws})
+    pol_land = {name: land_run(plan) for name, plan in pol_plans.items()}
+    loss_w = {ws: {name: optimal.policy_loss(ctx, df, df_land=pol_land[name], **{**cfg.TARGET_PATH, "w_smooth": ws})
                    for name, df in pol_react.items()}
               for ws in (0.5, 1.0, 2.0)}
     best_option = {f"λ = {ws:g}": min(cfg.POLICY_OPTIONS, key=loss_w[ws].get) for ws in loss_w}
     # the loss-minimising hold on a wider grid: the table of four options does not have to contain the minimum
     grid = [16.0 + 0.5 * k for k in range(8)]
     grid_plans = {r: pipeline.policy_plan(ctx, base_plan, {q: r for q in cfg.HOLD}) for r in grid}
-    grid_runs = {r: (react_run(gp), pipeline.run(ctx, gp)) for r, gp in grid_plans.items()}
+    grid_runs = {r: (react_run(gp), land_run(gp)) for r, gp in grid_plans.items()}
     best_hold = {f"λ = {ws:g}": min(grid, key=lambda r: optimal.policy_loss(ctx, grid_runs[r][0], df_land=grid_runs[r][1],
                                                                              **{**cfg.TARGET_PATH, "w_smooth": ws}))
                  for ws in (0.5, 1.0, 2.0)}
     print("Найменші втрати серед утримань 16–19,5%:", best_hold)
+
+    # ------------------------------------------------------------- robustness of the October decision
+    # each option fixes the October decision (and the promised hold) and its own target-consistent path; in the risk
+    # scenarios the rule then reacts around that path. Losses — the optimiser's function: nowcast as shocks, admin first
+    # round counted at ADMIN_REACTION (delta below), landing on actual inflation, rate changes from the rate in force
+    rob_opts = [16.0, 16.5, 17.0, 17.5, 18.0]
+    p_rec = {str(k): float(v) for k, v in rec_plan.exo["ir_pol"].items()}
+    delta = {c: (pipeline.run(ctx, pipeline.with_rate_path(base_s, p_rec))[c]
+                 - pipeline.run(ctx, pipeline.with_rate_path(react_s, p_rec))[c]) for c in ("d4l_cpi", "l_gdp_gap")}
+
+    def rob_loss(df, lam):
+        adj = df.copy()
+        for c in ("d4l_cpi", "l_gdp_gap"):
+            adj[c] = df[c] - delta[c].reindex(df.index).fillna(0.0)
+        return optimal.policy_loss(ctx, adj, df_land=df, **{**cfg.TARGET_PATH, "w_smooth": lam})
+
+    rob_scen = {"Базовий": None, **{k: v for k, v in cfg.SCENARIOS.items() if k != "Базовий"}, **RISKS, **COUNTER}
+    rob = {}
+    for r in rob_opts:
+        p_r = pipeline.policy_plan(ctx, base_plan, {q: r for q in cfg.HOLD})
+        p_rs = pipeline.nowcast_to_shock(ctx, p_r)
+        around_r = pipeline.rate_path_to_shock(ctx, p_rs, keep=[str(f)])
+        for name, fn in rob_scen.items():
+            d = pipeline.run(ctx, p_rs if fn is None else fn(around_r.copy(), f, ctx))
+            for lam in (0.5, 1.0, 2.0):
+                rob.setdefault(f"λ = {lam:g}", {}).setdefault(name, {})[r] = round(rob_loss(d, lam), 2)
+            rob.setdefault("cpi27", {}).setdefault(name, {})[r] = _q(d, "cpi_yoy", "2027Q4")
+    rob_sum = {}
+    for lk in ("λ = 0.5", "λ = 1", "λ = 2"):
+        t = pd.DataFrame(rob[lk]).T
+        e = {pk: {r: round(float(sum(t.loc[sn, r] * wgt for sn, wgt in pv.items())), 2) for r in rob_opts}
+             for pk, pv in cfg.ROBUST_PROBS.items()}
+        reg = t.sub(t.min(axis=1), axis=0).max()
+        rob_sum[lk] = {"E": e, "regret": {r: round(float(v), 2) for r, v in reg.items()},
+                       "best_E": {pk: min(v, key=v.get) for pk, v in e.items()}, "best_regret": float(reg.idxmin())}
+    pd.DataFrame(rob["λ = 1"]).T.to_csv(TAB / "robust_losses.csv", encoding="utf-8-sig")
+    print("Стійкість рішення (λ = 1):", rob_sum["λ = 1"])
     print("Найкращий варіант за вагою згладжування:", best_option)
     pol_tab = pd.DataFrame({
         name: {"Ставка IV кв. 2026": df.loc[f, "ir_pol"], "Ставка I кв. 2027": _q(df, "ir_pol", "2027Q1"),
@@ -207,6 +274,8 @@ def main():
         "real_rate_last_hist": {c: float(round(base.loc[f - 1, c], 2)) for c in ("rir_pol", "rir_tnd")},
         "best_option_by_lambda": best_option,
         "fx_risk": fx_risk, "risks_extra": risks,
+        "robust": {"losses": rob, "summary": rob_sum, "probs": cfg.ROBUST_PROBS, "options": rob_opts},
+        "rate_now": ctx["rate_now"],
         "best_hold_by_lambda": best_hold, "admin_reaction": cfg.ADMIN_REACTION,
         "brent_path": {q: round(float(ctx["dq"].loc[pd.Period(q, "Q"), "BRENT_USD"]), 1) for q in ("2026Q4", "2027Q4", "2028Q4")},
         "baseline_annual": {str(y): {k: float(v) for k, v in annual[y].items()} for y in annual.columns},

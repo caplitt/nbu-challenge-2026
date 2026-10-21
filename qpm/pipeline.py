@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .data import read_data
+from .data import read_data, read_iris_csv
 from .kalman import kalman_smoother
 from .model import Model
 from .nowcast import as_dict, cpi_nowcast
@@ -40,7 +40,11 @@ def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
             ser.loc[pd.Period(a, "Q"):pd.Period(b, "Q")] = v
         std[shock] = ser
     filt = kalman_smoother(model, obs, rngfilt, std)
-    return dict(dq=dq, model=model, filt=filt, rngfilt=rngfilt, nowcast=nc, nowcast_core=ncc, cfg=cfg,
+    # the policy rate in force at the end of the last history quarter (the model's ir_pol is a quarterly average):
+    # the cost of a rate change in the loss is measured from it, not from the average that includes earlier decisions
+    dm, _ = read_iris_csv(f"{cfg.DATA_DIR}/monthly.csv")
+    rate_now = float(dm["IR_POLICY_m"].dropna().loc[:pd.Period(last_hist, "Q").asfreq("M", "end")].iloc[-1])
+    return dict(dq=dq, model=model, filt=filt, rngfilt=rngfilt, nowcast=nc, nowcast_core=ncc, cfg=cfg, rate_now=rate_now,
                 hist=pd.period_range(cfg.FIRST_HIST, last_hist, freq="Q"),
                 rngfcast=pd.period_range(pd.Period(last_hist, "Q") + 1, cfg.LAST_FORE, freq="Q"))
 
