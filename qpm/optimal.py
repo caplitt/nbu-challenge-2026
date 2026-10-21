@@ -19,7 +19,10 @@ from .simulate import Plan
 
 
 def optimal_path(ctx, plan: Plan, w_gap=0.5, w_smooth=0.5, fixed: dict | None = None, w_last=1.0,
-                 last_from: str | None = None):
+                 last_from: str | None = None, landing_plan: Plan | None = None):
+    """landing_plan: from `last_from` on, inflation and the gap are taken from this plan instead of `plan` — e.g. the
+    path reacts to first-round administered prices only partly while they happen (`plan`), but the landing on the
+    target at the end of the horizon is judged on actual inflation (`landing_plan`, all judgments in full)."""
     fc = ctx["rngfcast"]
     target = ctx["model"].params["dl_cpi_tar"]
     fixed = {pd.Period(k, "Q"): float(v) for k, v in (fixed or {}).items()}
@@ -43,7 +46,13 @@ def optimal_path(ctx, plan: Plan, w_gap=0.5, w_smooth=0.5, fixed: dict | None = 
         M_gap[:, k] = (yk["l_gdp_gap"].reindex(fc) - y0["l_gdp_gap"].reindex(fc)).values
     pi0 = y0["d4l_cpi"].reindex(fc).values - M_pi @ x0
     gap0 = y0["l_gdp_gap"].reindex(fc).values - M_gap @ x0
-    w = np.array([w_last if last_from and p >= pd.Period(last_from, "Q") else 1.0 for p in fc])
+    land = np.array([bool(last_from) and p >= pd.Period(last_from, "Q") for p in fc])
+    if landing_plan is not None:   # the model is linear and both plans share exo/endo: only the free terms differ
+        base_l = pipeline.with_rate_path(landing_plan, {str(p): v for p, v in fixed.items()})
+        y0l = pipeline.run(ctx, pipeline.with_rate_path(base_l, {str(q): float(v) for q, v in zip(ctrl, x0)}))
+        pi0[land] = (y0l["d4l_cpi"].reindex(fc).values - M_pi @ x0)[land]
+        gap0[land] = (y0l["l_gdp_gap"].reindex(fc).values - M_gap @ x0)[land]
+    w = np.where(land, w_last, 1.0)
     i_prev = float(base_rule.loc[ctrl[0] - 1, "ir_pol"])
     D = np.eye(n) - np.eye(n, k=-1)
     d0 = np.zeros(n)
@@ -55,6 +64,9 @@ def optimal_path(ctx, plan: Plan, w_gap=0.5, w_smooth=0.5, fixed: dict | None = 
 
     def loss(df):
         pi, gap, i = (df[c].reindex(fc).values for c in ("d4l_cpi", "l_gdp_gap", "ir_pol"))
+        pi, gap = pi.copy(), gap.copy()
+        pi[land] = (pi0 + M_pi @ i[len(fixed):])[land]     # landing quarters as in the objective
+        gap[land] = (gap0 + M_gap @ i[len(fixed):])[land]
         di = np.diff(np.concatenate([[i_prev], i[len(fixed):]]))
         return float((w * (pi - target) ** 2).sum() + w_gap * (gap ** 2).sum() + w_smooth * (di ** 2).sum())
 
@@ -62,12 +74,17 @@ def optimal_path(ctx, plan: Plan, w_gap=0.5, w_smooth=0.5, fixed: dict | None = 
     return res, path, {"optimal": loss(res), "rule": loss(base_rule)}
 
 
-def policy_loss(ctx, df: pd.DataFrame, w_gap=0.5, w_smooth=0.5, w_last=1.0, last_from: str | None = None) -> float:
+def policy_loss(ctx, df: pd.DataFrame, w_gap=0.5, w_smooth=0.5, w_last=1.0, last_from: str | None = None,
+                df_land: pd.DataFrame | None = None) -> float:
     """The same loss as in optimal_path, over the whole forecast horizon, including the decision itself (the
-    change from the last history quarter): comparable across decision options."""
+    change from the last history quarter): comparable across decision options. df_land — as landing_plan above."""
     fc = ctx["rngfcast"]
     target = ctx["model"].params["dl_cpi_tar"]
-    w = np.array([w_last if last_from and p >= pd.Period(last_from, "Q") else 1.0 for p in fc])
-    pi, gap, i = (df[c].reindex(fc).values for c in ("d4l_cpi", "l_gdp_gap", "ir_pol"))
+    land = np.array([bool(last_from) and p >= pd.Period(last_from, "Q") for p in fc])
+    w = np.where(land, w_last, 1.0)
+    pi, gap, i = (df[c].reindex(fc).values.copy() for c in ("d4l_cpi", "l_gdp_gap", "ir_pol"))
+    if df_land is not None:
+        pi[land] = df_land["d4l_cpi"].reindex(fc).values[land]
+        gap[land] = df_land["l_gdp_gap"].reindex(fc).values[land]
     di = np.diff(np.concatenate([[float(ctx["filt"].vars.loc[fc[0] - 1, "ir_pol"])], i]))
     return float((w * (pi - target) ** 2).sum() + w_gap * (gap ** 2).sum() + w_smooth * (di ** 2).sum())

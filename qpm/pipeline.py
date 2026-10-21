@@ -41,11 +41,12 @@ def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
                 rngfcast=pd.period_range(pd.Period(last_hist, "Q") + 1, cfg.LAST_FORE, freq="Q"))
 
 
-def base_plan(ctx, judgments: bool = True, look_through: bool = False) -> Plan:
+def base_plan(ctx, judgments: bool = True, look_through: bool | float = False) -> Plan:
     """External sector fixed to the assumptions; CPI nowcast conditions; judgment shocks.
 
-    look_through=True drops judgments marked first_round (administered prices, excises): the plan a central
-    bank that ignores first-round effects of such price changes would optimise against."""
+    look_through: share of the judgments marked first_round (administered prices, excises) that is ignored —
+    True/1 drops them, 0.5 keeps half. Such a plan is what a central bank that (partly) looks through the
+    first-round effects of these price changes optimises against; the forecast itself always keeps them in full."""
     cfg = ctx["cfg"]
     fc = ctx["rngfcast"]
     plan = Plan(fc)
@@ -64,10 +65,11 @@ def base_plan(ctx, judgments: bool = True, look_through: bool = False) -> Plan:
             plan.exogenize("dl_er_tar", list(fx), list(fx.values()))
             plan.endogenize("res_dl_er_tar", list(fx))
         for j in getattr(cfg, "JUDGMENTS", []):
-            if look_through and j.get("first_round"):
+            scale = 1.0 - float(look_through) if j.get("first_round") else 1.0
+            if scale == 0:
                 continue
             pers = [pd.Period(x, "Q") for x in j["periods"]]
-            keep = [(p, v) for p, v in zip(pers, j["values"]) if p in fc]
+            keep = [(p, scale * v) for p, v in zip(pers, j["values"]) if p in fc]
             if keep:
                 plan.shock(j["shock"], [p for p, _ in keep], [v for _, v in keep])
     return plan
@@ -96,14 +98,21 @@ def with_rate_path(plan: Plan, path: dict | None) -> Plan:
     return plan
 
 
-def policy_plan(ctx, plan: Plan, decision: dict, look_through_loss: bool = False) -> Plan:
+def reaction_plan(ctx) -> Plan:
+    """The plan policy reacts to: first-round effects of administered prices count with weight cfg.ADMIN_REACTION
+    (partial reaction — they recur every year, so they are not a pure one-off, but they are still a first round)."""
+    return base_plan(ctx, look_through=1.0 - getattr(ctx["cfg"], "ADMIN_REACTION", 1.0))
+
+
+def policy_plan(ctx, plan: Plan, decision: dict) -> Plan:
     """The decision (and promised hold) on the first quarters, then the rate path that brings inflation back to the
     point target within the policy horizon (cfg.TARGET_PATH) — the way the NBU builds its baseline, instead of a
-    mechanical Taylor rule. With look_through_loss the path is chosen ignoring first-round judgments."""
+    mechanical Taylor rule. The path is optimised against reaction_plan (the same principle as for the decision);
+    the forecast applies it to `plan`, which keeps all judgments in full."""
     from .optimal import optimal_path   # optimal imports this module
     cfg = ctx["cfg"]
-    lt = base_plan(ctx, look_through=True) if look_through_loss else plan
-    _, path, _ = optimal_path(ctx, lt, fixed=decision, **cfg.TARGET_PATH)
+    lt = reaction_plan(ctx)
+    _, path, _ = optimal_path(ctx, lt, fixed=decision, landing_plan=plan, **cfg.TARGET_PATH)
     return with_rate_path(plan, {str(p): float(v) for p, v in path.items()})
 
 

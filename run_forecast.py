@@ -45,22 +45,47 @@ def main():
     scen = {name: pipeline.run(ctx, plan) for name, plan in pipeline.scenario_plans(ctx).items()}
     base = scen["Базовий"]
     rule = pipeline.run(ctx, pipeline.with_rate_path(base_plan, cfg.RECOMMENDED_RATE_PATH))
+    # FX risk: the hryvnia weakens as the market expects (≈5% a year, analysts' 12-month expectations) instead of the
+    # model's ≈1% — the rest of the economy reacts, the rule reacts around the baseline rate path
+    around = pipeline.rate_path_to_shock(ctx, pipeline.nowcast_to_shock(ctx, pipeline.policy_plan(ctx, base_plan,
+                                         cfg.RECOMMENDED_RATE_PATH)), keep=[str(f)])
+    fx_per = pd.period_range(f, "2027Q4", freq="Q")
+    l_er0 = float(base.loc[f - 1, "l_er"])
+    fx_plan = around.copy()
+    fx_plan.exogenize("l_er", fx_per, [l_er0 + 100 * np.log(1.05) * (k + 1) / 4 for k in range(len(fx_per))])
+    fx_plan.endogenize("res_l_er_uip", fx_per)
+    fx_run = pipeline.run(ctx, fx_plan)
+    fx_risk = {"cpi_2027Q4": _q(fx_run, "cpi_yoy", "2027Q4"), "cpi_peak": float(fx_run.loc[fc, "cpi_yoy"].max().round(2)),
+               "rate_peak": float(fx_run.loc[fc, "ir_pol"].max().round(2)), "uah_eur_2027Q4": _q(fx_run, "uah_eur", "2027Q4")}
+    print("Ризик: курс як чекає ринок:", fx_risk)
     print("Базовий vs чисте правило після утримання, ІСЦ IV кв. 2028 / 2029:",
           [round(float(d.loc[q, "cpi_yoy"]), 2) for d in (base, rule) for q in ("2028Q4", "2029Q4")])
-    pol = {name: pipeline.run(ctx, pipeline.policy_plan(ctx, base_plan, path)) for name, path in cfg.POLICY_OPTIONS.items()}
+    # policy reacts to first-round administered prices only partly (cfg.ADMIN_REACTION): the same principle for the
+    # decision, the path after the hold and the losses; the forecast itself keeps all judgments in full
+    react = pipeline.reaction_plan(ctx)
+
+    def react_run(plan):
+        """The same rate path, inflation measured as policy sees it (first round of admin prices partly netted out)."""
+        return pipeline.run(ctx, pipeline.with_rate_path(react, {str(k): float(v) for k, v in plan.exo["ir_pol"].items()}))
+
+    pol_plans = {name: pipeline.policy_plan(ctx, base_plan, path) for name, path in cfg.POLICY_OPTIONS.items()}
     # optimal rate path from the October decision on (min of quadratic loss), sensitivity to the smoothing weight
     tp = {k: v for k, v in cfg.TARGET_PATH.items() if k != "w_smooth"}
     opt_rows = {}
+
+    def opt_row(path_o, L):
+        return {**{str(p): round(float(v), 2) for p, v in path_o.items()},
+                "Втрати: оптимум": round(L["optimal"], 1), "Втрати: правило": round(L["rule"], 1)}
+
     for ws in (0.5, 1.0, 2.0):
-        res_o, path_o, L = optimal.optimal_path(ctx, base_plan, w_smooth=ws, **tp)
-        opt_rows[f"λ = {ws:g}"] = {**{str(p): round(float(v), 2) for p, v in path_o.items()},
-                                   "Втрати: оптимум": round(L["optimal"], 1), "Втрати: правило": round(L["rule"], 1)}
+        _, path_o, L = optimal.optimal_path(ctx, react, w_smooth=ws, landing_plan=base_plan, **tp)
+        opt_rows[f"λ = {ws:g}"] = opt_row(path_o, L)
         if ws == cfg.TARGET_PATH["w_smooth"]:
-            pol["Оптимальна (мін. втрат)"] = res_o
-    # the same with first-round effects of administered prices looked through (they are not in the loss)
-    _, path_lt, L = optimal.optimal_path(ctx, pipeline.base_plan(ctx, look_through=True), **cfg.TARGET_PATH)
-    opt_rows["λ = 1, без реакції на адмінціни"] = {**{str(p): round(float(v), 2) for p, v in path_lt.items()},
-                                                    "Втрати: оптимум": round(L["optimal"], 1), "Втрати: правило": round(L["rule"], 1)}
+            pol_plans["Оптимальна (мін. втрат)"] = pipeline.with_rate_path(base_plan, {str(k): float(v) for k, v in path_o.items()})
+    for lab, lt in (("λ = 1, повна реакція на адмінціни", 0.0), ("λ = 1, без реакції на адмінціни", 1.0)):
+        _, path_o, L = optimal.optimal_path(ctx, pipeline.base_plan(ctx, look_through=lt), **cfg.TARGET_PATH)
+        opt_rows[lab] = opt_row(path_o, L)
+    pol = {name: pipeline.run(ctx, plan) for name, plan in pol_plans.items()}
     opt_tab = pd.DataFrame(opt_rows).T
     opt_tab.to_csv(TAB / "optimal_paths.csv", encoding="utf-8-sig")
     print(opt_tab)
@@ -71,11 +96,21 @@ def main():
     annual.to_csv(TAB / "baseline_annual.csv", encoding="utf-8-sig")
 
     # policy options: the optimiser's own loss (inflation vs target, output gap, rate changes incl. the decision itself)
-    # over the whole horizon — higher rates cut inflation faster but need sharper rate moves, so there is an interior
-    # minimum; the smoothing weight is a preference, so the best option is reported for each weight
-    loss_w = {ws: {name: optimal.policy_loss(ctx, df, **{**cfg.TARGET_PATH, "w_smooth": ws}) for name, df in pol.items()}
+    # over the whole horizon, on inflation as policy sees it — higher rates cut inflation faster but need sharper rate
+    # moves; the smoothing weight is a preference, so the best option is reported for each weight
+    pol_react = {name: react_run(plan) for name, plan in pol_plans.items()}
+    loss_w = {ws: {name: optimal.policy_loss(ctx, df, df_land=pol[name], **{**cfg.TARGET_PATH, "w_smooth": ws})
+                   for name, df in pol_react.items()}
               for ws in (0.5, 1.0, 2.0)}
     best_option = {f"λ = {ws:g}": min(cfg.POLICY_OPTIONS, key=loss_w[ws].get) for ws in loss_w}
+    # the loss-minimising hold on a wider grid: the table of four options does not have to contain the minimum
+    grid = [16.0 + 0.5 * k for k in range(8)]
+    grid_plans = {r: pipeline.policy_plan(ctx, base_plan, {q: r for q in cfg.HOLD}) for r in grid}
+    grid_runs = {r: (react_run(gp), pipeline.run(ctx, gp)) for r, gp in grid_plans.items()}
+    best_hold = {f"λ = {ws:g}": min(grid, key=lambda r: optimal.policy_loss(ctx, grid_runs[r][0], df_land=grid_runs[r][1],
+                                                                             **{**cfg.TARGET_PATH, "w_smooth": ws}))
+                 for ws in (0.5, 1.0, 2.0)}
+    print("Найменші втрати серед утримань 16–19,5%:", best_hold)
     print("Найкращий варіант за вагою згладжування:", best_option)
     pol_tab = pd.DataFrame({
         name: {"Ставка IV кв. 2026": df.loc[f, "ir_pol"], "Ставка I кв. 2027": _q(df, "ir_pol", "2027Q1"),
@@ -148,6 +183,8 @@ def main():
                                for p in fc},
         "real_rate_last_hist": {c: float(round(base.loc[f - 1, c], 2)) for c in ("rir_pol", "rir_tnd")},
         "best_option_by_lambda": best_option,
+        "fx_risk": fx_risk,
+        "best_hold_by_lambda": best_hold, "admin_reaction": cfg.ADMIN_REACTION,
         "brent_path": {q: round(float(ctx["dq"].loc[pd.Period(q, "Q"), "BRENT_USD"]), 1) for q in ("2026Q4", "2027Q4", "2028Q4")},
         "baseline_annual": {str(y): {k: float(v) for k, v in annual[y].items()} for y in annual.columns},
         "scenarios": scen_tab.to_dict(orient="index"),

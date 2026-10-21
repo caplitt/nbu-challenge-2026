@@ -162,7 +162,26 @@ def qa():
         return float((lv.loc[f"{y}Q1":f"{y}Q4"].mean() / lv.loc[f"{y - 1}Q1":f"{y - 1}Q4"].mean() - 1) * 100)
 
     vs = K["vs_nbu"]
+    ov = ROOT / "data" / "overview"
+    key_now = float(pd.read_csv(ROOT / "data" / "raw" / "nbu_key_rate.csv", index_col=0).iloc[-1, 0])
+    cpi_y = pd.read_csv(ov / "cpi.csv", index_col=0, encoding="utf-8-sig")["cpi_yoy"].dropna()
+    exp_an = float(pd.read_csv(ov / "expectations.csv", index_col=0, encoding="utf-8-sig")["Фінансові аналітики"].dropna().iloc[-1])
+    usd = pd.read_csv(ov / "fx.csv", index_col=0, encoding="utf-8-sig")["грн/$"].dropna()
+    usd_yago = float(usd.loc[str(pd.Period(usd.index[-1], "M") - 12)])
+    w26 = pd.read_csv(ov / "wages.csv", index_col=0, encoding="utf-8-sig")["Номінальна"].dropna().loc["2026-01":]
+    bh = sorted(set(K["best_hold_by_lambda"].values()))
+    fxr = K["fx_risk"]
     v = dict(
+        opt_full=n(OP["λ = 1, повна реакція на адмінціни"]["2026Q4"]), opt_l05=n(OP["λ = 0.5"]["2026Q4"]),
+        admin=n(K["admin_reaction"] * 100, 0),
+        best_hold=" / ".join(f"{k.replace('.', ',')} — {n(x)}%" for k, x in K["best_hold_by_lambda"].items()),
+        best_hold_rng=f"{n(bh[0])}–{n(bh[-1])}",
+        fx_cpi27=n(fxr["cpi_2027Q4"]), fx_rate=n(fxr["rate_peak"]), fx_uah=n(fxr["uah_eur_2027Q4"]),
+        key_now=n(key_now, 0), cpi_last=n(cpi_y.iloc[-1]), exp_an=n(exp_an),
+        rr_post=n(key_now - cpi_y.iloc[-1]), rr_ante_an=n(key_now - exp_an), rr_ante_fc=n(key_now - Q["2027Q3"]["cpi_yoy"]),
+        usd_now=n(usd.iloc[-1]), usd_dep=n((usd.iloc[-1] / usd_yago - 1) * 100, 0),
+        wages_rng=f"{n(w26.min(), 0)}–{n(w26.max(), 0)}", wage_last=n(w26.iloc[-1], 0),
+        cpi_peak=n(SC["Базовий"]["ІСЦ пік"]),
         pot27=n(ygrowth("l_gdp_tnd", 2027)), pot28=n(ygrowth("l_gdp_tnd", 2028)), pot29=n(ygrowth("l_gdp_tnd", 2029)),
         pot26=n(ygrowth("l_gdp_tnd", 2026)),
         dgap27=n(yavg("l_gdp_gap", 2027) - yavg("l_gdp_gap", 2026), 1, True),
