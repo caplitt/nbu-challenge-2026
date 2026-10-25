@@ -68,6 +68,9 @@ class Plan:
 
 
 def _simulate(model: Model, s0: np.ndarray, eps: np.ndarray, anticipate=True) -> np.ndarray:
+    """Simulate H periods from state s0 with the shock matrix eps (H x shocks). With anticipate=True agents see the
+    whole shock path at t=0: the period-t state adds R(j) @ eps[t+j] for every future shock j (perfect foresight,
+    IRIS jforecast 'anticipate' true); otherwise only the current shock enters (R0)."""
     H = eps.shape[0]
     R = [model.R(j) for j in range(H)] if anticipate else [model.R0]
     s = np.zeros((H, model.n_states))
@@ -92,6 +95,7 @@ def forecast(model: Model, s0: np.ndarray, plan: Plan, anticipate=True) -> tuple
     per = list(plan.periods)
     H, k = len(per), len(model.shocks)
     pidx = {p: i for i, p in enumerate(per)}
+    # 1) judgment shocks from the plan, 2) the free (endogenized) shocks and the fixed (exogenized) points
     eps = np.zeros((H, k))
     for name, d in plan.shocks.items():
         for p, v in d.items():
@@ -102,6 +106,10 @@ def forecast(model: Model, s0: np.ndarray, plan: Plan, anticipate=True) -> tuple
         raise ValueError(f"Plan is not exactly determined: {len(cons)} exogenized points vs {len(free)} endogenized shocks")
     base = _simulate(model, s0, eps, anticipate)
     if cons:
+        # The model is linear, so each exogenized point is a linear function of the free shocks: M[i, j] = response
+        # of fixed point i to a unit free shock j (anticipated, hence the full-horizon simulation per shock). Solving
+        # M x = (target − unconditional path) gives the shock values that hit every fixed point exactly — the same
+        # algebra as IRIS jforecast with exogenize/endogenize.
         M = np.zeros((len(cons), len(free)))
         for jcol, (t, sh) in enumerate(free):
             e = np.zeros_like(eps); e[t, sh] = 1.0

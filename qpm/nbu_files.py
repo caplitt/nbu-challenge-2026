@@ -29,7 +29,12 @@ def _num(v):
 
 
 def read_ir_chart(sheet: str, path=IR_CHARTS, lang: str = "ua") -> pd.DataFrame:
-    """Data behind one Inflation Report chart, indexed by Period (M or Q) or year."""
+    """Data behind one Inflation Report chart, indexed by Period (M or Q) or year.
+
+    Layout of the NBU file (Tables_Charts_*.xlsx): one sheet per chart, row 2 = Ukrainian series names, row 3 =
+    English names, data from row 4; the first column (or the second, when the first holds a year and the second a
+    quarter label like 'IV.26') carries the period as a date, a quarter label or a two-digit year; blank labels
+    continue the previous quarter. Numbers may be stored as text with a decimal comma."""
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     rows = [list(r) for r in wb[sheet].iter_rows(values_only=True)]
     data = rows[3:]

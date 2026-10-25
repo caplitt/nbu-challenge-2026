@@ -135,7 +135,12 @@ def main():
     for lab, lt in (("λ = 1, повна реакція на адмінціни", 0.0), ("λ = 1, без реакції на адмінціни", 1.0)):
         _, path_o, L = optimal.optimal_path(ctx, pipeline.base_plan(ctx, look_through=lt), **cfg.TARGET_PATH)
         opt_rows[lab] = opt_row(path_o, L)
-    pol = {name: pipeline.run(ctx, plan) for name, plan in pol_plans.items()}
+    # Every option is run with the SAME nowcast shocks (land_run: all judgments in full, nowcast as fixed shocks
+    # implied once under the rule) — the runs behind the table are the runs behind the losses. Before 25.10.2026 the
+    # table columns came from runs that pinned CPI to the nowcast (a different implied shock per option) while the
+    # losses came from the fixed-shock runs; the 17% row therefore differs slightly from the baseline forecast, in
+    # which the current quarter IS pinned to the nowcast (key_numbers["options_vs_baseline"] reports the gap).
+    pol = {name: land_run(plan) for name, plan in pol_plans.items()}
     opt_tab = pd.DataFrame(opt_rows).T
     opt_tab.to_csv(TAB / "optimal_paths.csv", encoding="utf-8-sig")
     print(opt_tab)
@@ -149,7 +154,7 @@ def main():
     # over the whole horizon, on inflation as policy sees it — higher rates cut inflation faster but need sharper rate
     # moves; the smoothing weight is a preference, so the best option is reported for each weight
     pol_react = {name: react_run(plan) for name, plan in pol_plans.items()}
-    pol_land = {name: land_run(plan) for name, plan in pol_plans.items()}
+    pol_land = pol
     loss_w = {ws: {name: optimal.policy_loss(ctx, df, df_land=pol_land[name], **{**cfg.TARGET_PATH, "w_smooth": ws})
                    for name, df in pol_react.items()}
               for ws in (0.5, 1.0, 2.0)}
@@ -182,7 +187,11 @@ def main():
     rob = {}
     for r in rob_opts:
         p_r = pipeline.policy_plan(ctx, base_plan, {q: r for q in cfg.HOLD})
-        p_rs = pipeline.nowcast_to_shock(ctx, p_r)
+        # the same nowcast shocks for every option (base_s: implied once, under the rule — as in optimal_path and in
+        # the options table). Re-implying them per option (the code until 25.10.2026) made a higher rate 'need' a
+        # bigger Q4 cost-push shock, which carried into 2027 and penalised 17.5–18% in this table only; the baseline
+        # row now equals the options table (see pipeline.nowcast_to_shock and docs/audit_2026-10-25.md)
+        p_rs = pipeline.with_rate_path(base_s, {str(k): float(v) for k, v in p_r.exo["ir_pol"].items()})
         around_r = pipeline.rate_path_to_shock(ctx, p_rs, keep=[str(f)])
         for name, fn in rob_scen.items():
             d = pipeline.run(ctx, p_rs if fn is None else fn(around_r.copy(), f, ctx))
@@ -229,8 +238,9 @@ def main():
         b.to_csv(TAB / f"fan_{v}.csv")
 
     # ------------------------------------------------------------- backtest
+    # "actual" = observed data only (no nowcasts, no filter projection): quarters without data stay blank
     full = pipeline.prepare(cfg, use_nowcast=False)
-    actual = pipeline.add_reporting(full["filt"].vars)
+    actual = backtest.actual_from_data(full["dq"])
     bt = backtest.run(cfg, "2025Q3", actual, horizon=4)
     bt.to_csv(TAB / "backtest_2025Q3.csv", encoding="utf-8-sig")
     bt_err = pd.concat({o: backtest.errors(backtest.run(cfg, o, actual, 4)) for o in ("2025Q2", "2025Q3", "2025Q4")})
@@ -296,6 +306,11 @@ def main():
         "backtest_rmse": bt_err.reset_index().rename(columns={"level_0": "origin", "level_1": "var"}).to_dict(orient="records"),
         "vs_nbu": comp.to_dict(),
         "sigma": sigma.round(2).to_dict(),
+        # current-quarter conditioning of the baseline and how far the fixed-shock 17% option run is from it
+        "fx_nowcast": {str(p): {**v, "level": round(v["level"], 4)} for p, v in ctx["fx_nowcast"].items()},
+        "options_vs_baseline": {q: {c: round(float(pol[cfg.RECOMMENDATION["option"]].loc[pd.Period(q, "Q"), c] - base.loc[pd.Period(q, "Q"), c]), 3)
+                                    for c in ("cpi_yoy", "ir_pol", "l_gdp_gap")} for q in ("2026Q4", "2027Q4", "2028Q4")},
+        "brent_history_source": "EIA spot, monthly averages (no futures in history)",
     }
     (OUT / "key_numbers.json").write_text(json.dumps(key, ensure_ascii=False, indent=1, default=float), encoding="utf-8")
 

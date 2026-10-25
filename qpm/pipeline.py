@@ -7,16 +7,22 @@ import pandas as pd
 from .data import read_data, read_iris_csv
 from .kalman import kalman_smoother
 from .model import Model
-from .nowcast import as_dict, cpi_nowcast
+from .nowcast import as_dict, cpi_nowcast, fx_nowcast
 from .simulate import Plan, forecast
 
+# External variables fixed to the assumptions on the forecast (euro area and oil), with the shock that absorbs them
 EXTERNAL = [("ir_ea", "res_ir_ea"), ("l_gdp_ea_gap", "res_l_gdp_ea_gap"), ("dl_cpi_ea", "res_dl_cpi_ea"),
             ("dl_roil", "res_dl_roil")]
 DOMESTIC_OBS = ("L_GDP", "L_CPI", "L_CPI_C", "IR_POLICY", "L_ER")
+# Current-quarter conditions (nowcasts) and the shocks that deliver them: headline CPI -> non-core relative price
+# (food, fuel, tariffs), core CPI -> core cost-push, exchange rate -> UIP (risk-premium) shock
+NOWCAST_PAIRS = (("l_cpi", "res_dl_rnc"), ("l_cpi_c", "res_dl_cpi_c"), ("l_er", "res_l_er_uip"))
 
 
-def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
-    """Read data (+ nowcasts), add tunes, build model, run the Kalman smoother."""
+def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True, cutoff: str | None = None):
+    """Read data (+ nowcasts), add tunes, build model, run the Kalman smoother.
+
+    cutoff: drop domestic data after this quarter before seasonal adjustment (quasi-real-time backtest)."""
     last_hist = last_hist or cfg.LAST_HIST
     nc = cpi_nowcast(data_dir=cfg.DATA_DIR, **cfg.CPI_NOWCAST) if use_nowcast and getattr(cfg, "CPI_NOWCAST", None) else None
     # core CPI nowcast by the same method: otherwise the whole near-term surprise would be attributed to non-core prices
@@ -24,7 +30,12 @@ def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
            if nc is not None and getattr(cfg, "CORE_NOWCAST", False) else None)
     dq = read_data(cfg.DATA_DIR, as_dict(nc) if nc is not None else None,
                    getattr(cfg, "GDP_NOWCAST", None) if use_nowcast else None,
-                   as_dict(ncc) if ncc is not None else None)
+                   as_dict(ncc) if ncc is not None else None, cutoff=cutoff)
+    # exchange-rate nowcast for the current quarter: observed months + the latest rate held flat (qpm.nowcast)
+    fxn = {}
+    if use_nowcast:
+        for q in getattr(cfg, "FX_NOWCAST", []):
+            fxn[pd.Period(q, "Q")] = fx_nowcast(q, data_dir=cfg.DATA_DIR)
     dq["L_GDP_GAP"] = np.nan
     for per, val in cfg.GDP_GAP_TUNES.items():
         dq.loc[pd.Period(per, "Q"), "L_GDP_GAP"] = val
@@ -44,8 +55,8 @@ def prepare(cfg, last_hist: str | None = None, use_nowcast: bool = True):
     # the cost of a rate change in the loss is measured from it, not from the average that includes earlier decisions
     dm, _ = read_iris_csv(f"{cfg.DATA_DIR}/monthly.csv")
     rate_now = float(dm["IR_POLICY_m"].dropna().loc[:pd.Period(last_hist, "Q").asfreq("M", "end")].iloc[-1])
-    return dict(dq=dq, model=model, filt=filt, rngfilt=rngfilt, nowcast=nc, nowcast_core=ncc, cfg=cfg, rate_now=rate_now,
-                hist=pd.period_range(cfg.FIRST_HIST, last_hist, freq="Q"),
+    return dict(dq=dq, model=model, filt=filt, rngfilt=rngfilt, nowcast=nc, nowcast_core=ncc, fx_nowcast=fxn, cfg=cfg,
+                rate_now=rate_now, hist=pd.period_range(cfg.FIRST_HIST, last_hist, freq="Q"),
                 rngfcast=pd.period_range(pd.Period(last_hist, "Q") + 1, cfg.LAST_FORE, freq="Q"))
 
 
@@ -70,6 +81,10 @@ def base_plan(ctx, judgments: bool = True, look_through: bool | float = False) -
                 if ctx.get("nowcast_core") is not None and not pd.isna(ctx["dq"].loc[p, "L_CPI_C"]):
                     plan.exogenize("l_cpi_c", [p], [ctx["dq"].loc[p, "L_CPI_C"]])
                     plan.endogenize("res_dl_cpi_c", [p])
+    for p, fxn in ctx.get("fx_nowcast", {}).items():   # current-quarter UAH/EUR: observed months + latest rate
+        if p in fc:
+            plan.exogenize("l_er", [p], [100 * np.log(fxn["level"])])
+            plan.endogenize("res_l_er_uip", [p])
     if judgments:
         fx = {pd.Period(k, "Q"): v for k, v in getattr(cfg, "FX_TARGET_PATH", {}).items() if pd.Period(k, "Q") in fc}
         if fx:
@@ -153,17 +168,27 @@ def rate_path_to_shock(ctx, plan: Plan, keep: list[str]) -> Plan:
     return out
 
 
-def nowcast_to_shock(ctx, plan: Plan) -> Plan:
-    """Replace the CPI nowcast condition by the cost-push shock it implies in this plan, so that scenario
-    shocks (oil, exchange rate, ...) can move CPI in the nowcast quarters instead of being absorbed."""
-    cond = list(plan.exo.get("l_cpi", {}))
+def nowcast_to_shock(ctx, plan: Plan, rate_path: dict | None = None) -> Plan:
+    """Replace the current-quarter conditions (CPI, core CPI, exchange-rate nowcasts) by the shocks they imply, so
+    that scenario shocks (oil, exchange rate, ...) can move those variables in the nowcast quarters instead of being
+    absorbed, and so that alternative rate paths are compared with the SAME shocks.
+
+    rate_path: compute the implied shocks with this policy-rate path fixed (default: the plan as it is, i.e. under
+    the Taylor rule if the plan fixes no rate). Comparing rate options must use one set of implied shocks: if each
+    option re-implied its own shock to hit the CPI nowcast, a higher rate would 'need' a bigger cost-push shock in
+    the current quarter, which then carries into the next year and penalises the higher rate (found in the
+    robustness table on 25.10.2026, see docs/audit_2026-10-25.md)."""
+    cfg = ctx["cfg"]
+    cond_q = {pd.Period(q, "Q") for q in getattr(cfg, "CPI_NOWCAST_CONDITION", [])} | set(ctx.get("fx_nowcast", {}))
+    cond = [(var, shock) for var, shock in NOWCAST_PAIRS if any(p in cond_q for p in plan.exo.get(var, {}))]
     if not cond:
         return plan
-    implied = run(ctx, plan).attrs["shocks"]
+    ref = with_rate_path(plan, rate_path) if rate_path else plan
+    implied = run(ctx, ref).attrs["shocks"]
     out = plan.copy()
-    for var, shock in (("l_cpi", "res_dl_rnc"), ("l_cpi_c", "res_dl_cpi_c")):
+    for var, shock in cond:
         for per in list(out.exo.get(var, {})):
-            if per not in cond:
+            if per not in cond_q:
                 continue
             out.exo[var].pop(per)
             out.endo[shock].discard(per)

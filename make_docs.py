@@ -54,19 +54,27 @@ def assumptions():
     L.append("## 3. Траєкторія цільового курсу (dl_er_tar, % річних)\n")
     L.append(" · ".join(f"{k}: {v}" for k, v in cfg.FX_TARGET_PATH.items()))
     q = K["baseline_quarterly"]
-    L.append("\nОбґрунтування: темп послаблення, який НБУ допускає в режимі керованої гнучкості (EUR/USD 1,16 → 1,18 → "
-             "1,19 за припущенням НБУ + помірне послаблення до долара). Фактичний курс у моделі залежить ще й від паритету "
-             f"ставок: за ставки {n(cfg.RECOMMENDATION['rate'])}% гривня слабшає лише на ≈1% на рік "
+    fo = pd.read_csv(ROOT / "data" / "foreign.csv", index_col=0)
+    usd_eur_h = float(fo.loc["2027Q1", "USD_EUR"])
+    eur_yr = ((q[cfg.LAST_FORE]["uah_eur"] / q[K["first_forecast"]]["uah_eur"]) ** (4 / (len(q) - 1)) - 1) * 100
+    L.append("\nОбґрунтування: допустимий темп послаблення в режимі керованої гнучкості (β = 0,7: фактичний курс лише на 70% "
+             "іде за цільовим, решта — паритет ставок). Фактичний курс у моделі залежить ще й від паритету "
+             f"ставок: за ставки {n(cfg.RECOMMENDATION['rate'])}% гривня до євро слабшає в середньому на ≈{n(eur_yr)}% на рік "
              f"({n(q[K['first_forecast']]['uah_eur'])} → {n(q[cfg.LAST_FORE]['uah_eur'])} грн/€ до {cfg.LAST_FORE}). "
-             "Після 2028 р. цільовий темп — модельний (повернення до рівноважного).\n")
+             "Після 2028 р. цільовий темп — модельний (повернення до рівноважного).")
+    fxn = K.get("fx_nowcast", {})
+    if fxn:
+        L.append("\nКурс у поточному кварталі (`config.FX_NOWCAST`): " + "; ".join(
+            f"{qq}: {n(v['level'], 2)} грн/€ = " + ", ".join(f"{m} — {t}" for m, t in v["months"].items()) for qq, v in fxn.items()) + ".")
+    L.append(f"\nКурс грн/$ на слайдах = грн/€ ÷ USD/EUR; USD/EUR на горизонті — {n(usd_eur_h, 4)} (останній місяць за ЄЦБ, без змін; "
+             "липневе припущення НБУ 1,16 / 1,18 / 1,19 застаріло після падіння EUR/USD у жовтні 2026).\n")
     L.append("## 4. Зовнішні припущення\n")
     L.append("- Єврозона: HICP 3,0 / 2,5 / 2,1% (2026–2028), ВВП 0,9 / 1,4 / 1,5% — прогноз ЄЦБ (вересень 2026); "
-             "ставка ЄЦБ 2,75% (IV кв. 2026) → 3,0% (2027) → 2,5% (кінець 2028) — ринкові очікування (OIS).")
-    fo = pd.read_csv(ROOT / "data" / "foreign.csv", index_col=0)
+             "ставка ЄЦБ 2,75% (IV кв. 2026) → 3,0% (2027–2028) — технічні припущення того самого прогнозу ЄЦБ (EURIBOR 3M ≈3,0%).")
     br = {q: float(fo.loc[q, "BRENT_USD"]) for q in ("2026Q3", "2026Q4", "2027Q4", "2028Q4") if q in fo.index}
     L.append("- Нафта Brent: " + " → ".join(f"{q} ${n(v, 0)}" for q, v in br.items()) +
-             " (факт EIA до III кв. 2026, далі ф'ючерсна крива NYMEX BZ); реальна ціна в євро входить у небазову "
-             "інфляцію з вагою `w_oil` = 0,016 (`model/params.yaml`).")
+             " (спот EIA до III кв. 2026; IV кв. 2026 — жовтень за спотом, листопад–грудень за ф'ючерсом; далі ф'ючерсна "
+             "крива NYMEX BZ); реальна ціна в євро входить у небазову інфляцію з вагою `w_oil` = 0,016 (`model/params.yaml`).")
     L.append("- Деталі та джерела — `data/UPDATE_LOG.md`.\n")
     L.append("## 5. Рішення, за яким будується базовий прогноз\n")
     L.append(f"- {cfg.RECOMMENDATION['option']}: середня ставка {n(cfg.RECOMMENDATION['rate'])}% у "
@@ -100,7 +108,7 @@ def summary():
           "Невизначеність (інтервал 70% імовірності для ІСЦ, % р/р): "
           + "; ".join(f"{q[:4]} — {n(v['q15'])}…{n(v['q85'])} (медіана {n(v['q50'])})" for q, v in K["fan_cpi"].items())
           + ".\n",
-          "## Бектест (RMSE прогнозу на 4 квартали)\n",
+          "## Бектест (RMSE за горизонтами 1–4 квартали, лише квартали з фактом)\n",
           md_table(pd.read_csv(TAB / "backtest_errors.csv", index_col=[0, 1], encoding="utf-8-sig")), "\n"]
     (DOCS / "forecast_summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")
 
@@ -143,7 +151,7 @@ def qa():
     rate_of = lambda name: name.split(" ")[-1].rstrip("%")  # noqa: E731  'Підвищити до 17,5%' -> '17,5'
     bp = K["brent_path"]
     bt = pd.read_csv(TAB / "backtest_errors.csv", index_col=[0, 1], encoding="utf-8-sig")
-    bt.columns = ["model", "naive"]
+    bt.columns = ["model", "naive", "n_obs"]
     bt = bt[[i[1].startswith("ІСЦ") for i in bt.index]]
     nc = pd.read_csv(TAB / "cpi_nowcast.csv", index_col=0, encoding="utf-8-sig")
     months = {"01": "січень", "02": "лютий", "03": "березень", "04": "квітень", "05": "травень", "06": "червень",
@@ -249,6 +257,10 @@ def qa():
         hh_jul=n(hh_jul, 2), hh_sep=n(hh_sep, 2), hh_pct=n((hh_sep / hh_jul - 1) * 100, 0),
         fx_exp_month=str(fxe["Фінансові аналітики"].dropna().index[-1]),
         fx_exp_an=n(fxe["Фінансові аналітики"].dropna().iloc[-1]), fx_exp_hh=n(fxe["Домогосподарства"].dropna().iloc[-1]),
+        # model exchange-rate path over 2027 (Q4 2026 -> Q4 2027) vs USD and EUR, and the USD/EUR assumption behind it
+        usd27=n((Q["2027Q4"]["uah_usd"] / Q["2026Q4"]["uah_usd"] - 1) * 100, 1, True),
+        eur27=n((Q["2027Q4"]["uah_eur"] / Q["2026Q4"]["uah_eur"] - 1) * 100, 1, True),
+        usd_eur=n(float(pd.read_csv(ROOT / "data" / "foreign.csv", index_col=0).loc["2027Q1", "USD_EUR"]), 2),
     )
     tpl = (DOCS / "templates" / "qa_prep.md").read_text(encoding="utf-8")
     (DOCS / "qa_prep.md").write_text(tpl.format_map(v), encoding="utf-8")

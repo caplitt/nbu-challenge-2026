@@ -13,10 +13,12 @@ ECB = "https://data-api.ecb.europa.eu/service/data"
 EUROSTAT = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data"
 
 
-def _get(url, **kw):
+def _get(url, headers=UA, **kw):
+    """GET with three attempts. `headers` default to a browser User-Agent (the NBU site answers scripts only with it);
+    FRED is fetched with the plain default headers instead (see fred())."""
     for attempt in range(3):
         try:
-            r = requests.get(url, headers=UA, timeout=60, **kw)
+            r = requests.get(url, headers=headers, timeout=60, **kw)
             r.raise_for_status()
             return r
         except requests.RequestException:
@@ -110,8 +112,12 @@ def ea_hicp(start="2024-01") -> pd.Series:
 
 
 def fred(series_id: str, start: str = "2023-01-01") -> pd.Series:
-    """FRED series (no API key needed for the CSV endpoint), e.g. DCOILBRENTEU = Brent, $/bbl."""
-    txt = _get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}").text
+    """FRED series (no API key needed for the CSV endpoint), e.g. DCOILBRENTEU = Brent, $/bbl.
+
+    Behind a corporate/agent proxy `requests` needs its CA bundle: set REQUESTS_CA_BUNDLE (the NBU/ECB hosts work
+    without it, FRED does not). FRED is fetched with the default headers: it needs no browser User-Agent, and some
+    proxies refuse a spoofed one for this host."""
+    txt = _get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}", headers=None).text
     df = pd.read_csv(io.StringIO(txt))
     s = pd.to_numeric(df.iloc[:, 1], errors="coerce")
     s.index = pd.to_datetime(df.iloc[:, 0])
@@ -129,15 +135,58 @@ def _yahoo_daily(symbol: str, rng: str = "2y") -> pd.Series:
     return s.dropna()
 
 
+DBNOMICS_BRENT = "https://api.db.nomics.world/v22/series/EIA/PET/RBRTE.M?observations=1"
+
+
 def brent_monthly(start: str = "1999-01") -> pd.Series:
-    """Brent, $/bbl, monthly average: EIA spot (via DBnomics) + front-month futures (Yahoo) for the latest months."""
-    doc = _get("https://api.db.nomics.world/v22/series/EIA/PET/RBRTE.M?observations=1").json()["series"]["docs"][0]
-    eia = pd.Series(doc["value"], index=pd.PeriodIndex(doc["period"], freq="M"), dtype=float)
-    fut = _yahoo_daily("BZ=F", "2y").resample("ME").mean()
-    fut.index = fut.index.to_period("M")
-    out = eia.combine_first(fut[fut.index > eia.index.max()])
-    out.attrs["eia_last"] = str(eia.index.max())
-    return out.loc[start:]
+    """Brent spot (Europe, EIA series RBRTE), $/bbl, monthly average of daily prices.
+
+    Sources, in order of preference:
+      1. FRED MCOILBRENTEU — the EIA monthly series, published a few days after month-end;
+      2. DBnomics EIA/PET/RBRTE.M — the same series, used only for months FRED does not have (it often lags by months);
+      3. the current month = month-to-date average of the daily spot (FRED DCOILBRENTEU), listed in .attrs["mtd"]
+         as {month: last date included}.
+    Futures are never spliced into the spot history: under backwardation the front-month contract runs far below spot
+    (September 2026: $102 front month vs $114 spot), which understated oil prices in the model data until 25.10.2026.
+    """
+    eia = None
+    try:
+        m = fred("MCOILBRENTEU", f"{start}-01")
+        eia = pd.Series(m.values, index=pd.PeriodIndex(m.index, freq="M"), dtype=float)
+    except Exception as e:  # FRED down: fall back to DBnomics only
+        print(f"FRED MCOILBRENTEU недоступний ({type(e).__name__}); беру DBnomics")
+    try:
+        doc = _get(DBNOMICS_BRENT).json()["series"]["docs"][0]
+        db = pd.Series(doc["value"], index=pd.PeriodIndex(doc["period"], freq="M"), dtype=float)
+        eia = db if eia is None else eia.combine_first(db)
+    except Exception as e:
+        if eia is None:
+            raise
+        print(f"DBnomics недоступний ({type(e).__name__}); лише FRED")
+    eia = eia.sort_index().dropna()
+    out = eia.loc[start:].copy()
+    mtd_info = {}
+    try:
+        daily = fred("DCOILBRENTEU", str((eia.index.max() + 1).start_time.date()))
+        if len(daily):
+            mtd = daily.groupby(daily.index.to_period("M")).mean()
+            mtd = mtd[mtd.index > eia.index.max()]
+            if len(mtd):
+                out = pd.concat([out, mtd])   # (concat drops attrs, so they are set below)
+                mtd_info = {str(p): str(daily.loc[str(p)].index.max().date()) for p in mtd.index}
+    except Exception as e:  # no daily data: the series simply ends with the last complete month
+        print(f"FRED DCOILBRENTEU недоступний ({type(e).__name__}); без поточного місяця")
+    out.name = "brent_usd"
+    out.attrs["spot_last"] = str(eia.index.max())   # last complete month
+    out.attrs["mtd"] = mtd_info
+    return out
+
+
+def ecb_usd_per_eur_daily(start: str) -> pd.Series:
+    """ECB reference rate, USD per EUR, daily (for the month-to-date average of the current month)."""
+    s = ecb_series("EXR/D.USD.EUR.SP00.A", start)
+    s.index = pd.to_datetime(s.index)
+    return s.dropna()
 
 
 def brent_futures(months: list[str]) -> pd.Series:

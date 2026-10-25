@@ -25,5 +25,5 @@ p.std_res_prem_uip_gap = 1.5;
 p.std_res_ir_ea = 1;
 p.std_res_dl_cpi_ea = 1;
 p.std_res_l_gdp_ea_gap = 1;
-p.std_res_dl_roil = 1;
+p.std_res_dl_roil = 60;
 end

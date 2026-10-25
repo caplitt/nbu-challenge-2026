@@ -1,8 +1,11 @@
 """Forecast uncertainty: fan charts by stochastic simulation around the baseline.
 
 The model is linear, so each draw = baseline + response to unanticipated shocks e_t ~ N(0, sigma^2).
-Sigma for each domestic shock = std of its smoothed estimates over a recent window (2023Q1 onwards),
-i.e. the volatility the economy actually showed after the 2022 shock.
+Sigma for each shock = std of its smoothed estimates over a recent window (2023Q1 onwards), i.e. the volatility the
+economy actually showed after the 2022 shock. The shocks are the domestic ones plus the oil price and the
+euro-area block: on the forecast those variables are fixed to assumptions (futures curve, ECB projections), and the
+fan shows what their usual surprises would do. The calibrated std in model/params.yaml are not used here: they
+matter only for the filter (how the data are split between shocks), not for the forecast bands.
 """
 from __future__ import annotations
 
@@ -13,11 +16,14 @@ from .kalman import FilterResult
 from .model import Model
 
 DOMESTIC_SHOCKS = ["res_dl_cpi_c", "res_dl_rnc", "res_l_gdp_gap", "res_l_er_uip", "res_dl_er_tar", "res_ir_tlr", "res_prem_uip_gap"]
+EXTERNAL_SHOCKS = ["res_dl_roil", "res_ir_ea", "res_dl_cpi_ea", "res_l_gdp_ea_gap"]
+FAN_SHOCKS = DOMESTIC_SHOCKS + EXTERNAL_SHOCKS
 
 
-def empirical_sigma(filt: FilterResult, start="2023Q1", end=None) -> pd.Series:
+def empirical_sigma(filt: FilterResult, start="2023Q1", end=None, shocks=FAN_SHOCKS) -> pd.Series:
+    """Standard deviation of the smoothed shocks over [start, end] (the fan's shock volatility)."""
     sh = filt.shocks.loc[start:end]
-    return sh[DOMESTIC_SHOCKS].std()
+    return sh[list(shocks)].std()
 
 
 def fan(model: Model, baseline: pd.DataFrame, periods: pd.PeriodIndex, sigma: pd.Series,
@@ -31,7 +37,8 @@ def fan(model: Model, baseline: pd.DataFrame, periods: pd.PeriodIndex, sigma: pd
     T = model.T
     draws = {v: np.zeros((n, H)) for v in variables}
     vi = {v: model.si[v] for v in variables}
-    # also y-o-y CPI needs past quarterly CPI deviations: d4l_cpi is a model variable, so it is in the state
+    # the state carries all lags the y-o-y rates need (d4l_cpi is itself a model variable), so deviations from the
+    # baseline are simply propagated with T and added to the baseline afterwards (linearity)
     for k in range(n):
         e = rng.normal(size=(H, len(idx))) * sigma.values
         x = np.zeros(N)

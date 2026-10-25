@@ -1,5 +1,10 @@
 """Charts for slides (static PNG). Palette and mark specs follow the team's dataviz rules:
-fixed categorical order, 2px lines, hairline solid grid, legend for >= 2 series, text in ink colours."""
+fixed categorical order, 2px lines, hairline solid grid, legend for >= 2 series, text in ink colours.
+
+Helpers: grid() makes a figure with n panels; line_panel() plots quarterly series with a shaded forecast area from
+`first_fore`, optional target line and fan bands; monthly_panel() the same for monthly data; bar_panel() bars with
+value labels; save() writes the PNG with a source note under the chart. Every chart in results/figures is built
+through these, so one style applies to the whole deck."""
 from __future__ import annotations
 
 from pathlib import Path
