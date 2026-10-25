@@ -77,8 +77,11 @@ def main():
         plan.shock("res_dl_cpi_c", list(pd.period_range("2027Q1", "2027Q4", freq="Q")), [1.0] * 4)
         return plan
 
-    def sc_vat(plan, f_, ctx_=None):       # VAT 21%: calibrated to +0.54 pp on CPI y/y (NBU: 0.4-0.7 pp)
-        plan.shock("res_dl_cpi_c", [pd.Period("2027Q1", "Q")], [0.8])
+    def sc_vat(plan, f_, ctx_=None):
+        """VAT 20 -> 21% from 2027: a one-off core cost-push shock of 1.5 (q/q annualised) in 2027Q1 lifts CPI y/y by
+        ≈0.54 pp at the peak (IRF: 0.8 -> 0.29, 1.2 -> 0.43, 1.5 -> 0.54) — the midpoint of the NBU's estimate of
+        +0.4–0.7 pp (Interfax, 17.09.2026). Until 25.10.2026 the shock was 0.8 with a comment claiming +0.54."""
+        plan.shock("res_dl_cpi_c", [pd.Period("2027Q1", "Q")], [1.5])
         return plan
 
     def sc_weak(plan, f_, ctx_=None):      # counterweight: demand weaker than assumed (attacks, fiscal consolidation)
