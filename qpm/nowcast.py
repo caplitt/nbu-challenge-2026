@@ -80,8 +80,9 @@ def fx_nowcast(quarter: str, data_dir="data", raw_file="raw/nbu_eur.csv") -> dic
     q = pd.Period(quarter, "Q")
     months = pd.period_range(q.asfreq("M", "start"), q.asfreq("M", "end"), freq="M")
     detail, vals = {}, []
+    s_month = s.index.to_period("M")
     for m in months:
-        d = s.loc[str(m)] if str(m) in s.index.to_period("M").astype(str) else pd.Series(dtype=float)
+        d = s[s_month == m]
         if len(d):
             vals.append(float(d.mean()))
             detail[str(m)] = f"{d.mean():.4f} (середнє {d.index.min().date()}–{d.index.max().date()})"

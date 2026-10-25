@@ -87,8 +87,11 @@ def update_monthly(log):
     cpi.to_csv(RAW / "nbu_cpi.csv")
     key = fetch.nbu_key_rate()
     key.to_csv(RAW / "nbu_key_rate.csv", header=["key_rate"])
-    # daily rate up to today: the model takes only full months, the FX nowcast (qpm.nowcast.fx_nowcast) the rest
-    eur = fetch.nbu_fx("EUR", "2024-01-01", date.today())
+    # daily rate up to tomorrow (the NBU sets the next business day's rate the afternoon before — the same end date as
+    # qpm.overview.build uses for the slides): the model takes only full months, the FX nowcast
+    # (qpm.nowcast.fx_nowcast) the rest
+    from datetime import timedelta
+    eur = fetch.nbu_fx("EUR", "2024-01-01", date.today() + timedelta(days=1))
     eur.to_csv(RAW / "nbu_eur.csv", header=["uah_eur"])
     eur = eur.loc[:pd.Period(CUTOFF_MONTH, "M").end_time]
 
@@ -291,12 +294,16 @@ def update_oil(dx, com, log):
         raise RuntimeError("Не вдалося отримати ф'ючерсну криву Brent")
     path = path.interpolate(limit_direction="both")
     first = horizon[0]
-    observed = brent[(brent.index.asfreq("Q") == first) & (brent.index > full.index.max())]
+    # every month of the first horizon quarter that already has a spot price — complete months and the month-to-date
+    # one alike (they are all beyond last_full_q, so none of them is in bq): e.g. October actual + November/December
+    # at the futures price; once October and November are complete, December alone comes from the futures
+    observed = brent[brent.index.asfreq("Q") == first]
     blend_note = ""
-    if len(observed):   # e.g. October actual + November/December at the futures price
+    if len(observed):
         path[first] = (observed.sum() + (3 - len(observed)) * path[first]) / 3
-        blend_note = (f" У {first}: {', '.join(f'{p} ${v:.1f} (спот)' for p, v in observed.items())}, решта місяців — "
-                      f"ф'ючерс ${fut.get(first, np.nan):.1f} → середнє ${path[first]:.1f}.")
+        blend_note = (" У " + str(first) + ": " + ", ".join(f"{p} ${v:.1f} (спот{', до ' + mtd[p] if p in mtd else ''})"
+                                                            for p, v in observed.items())
+                      + f", решта місяців — ф'ючерс ${fut.get(first, np.nan):.1f} → середнє ${path[first]:.1f}.")
     dx["BRENT_USD"] = pd.concat([bq.reindex(dx.index[dx.index <= last_full_q]), path]).reindex(dx.index).round(2)
     # USD/EUR: latest month-to-date ECB reference rate, held flat (random walk)
     usd_daily = fetch.ecb_usd_per_eur_daily(str((usd.index.max() + 1).start_time.date()))

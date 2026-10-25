@@ -168,23 +168,23 @@ def rate_path_to_shock(ctx, plan: Plan, keep: list[str]) -> Plan:
     return out
 
 
-def nowcast_to_shock(ctx, plan: Plan, rate_path: dict | None = None) -> Plan:
-    """Replace the current-quarter conditions (CPI, core CPI, exchange-rate nowcasts) by the shocks they imply, so
-    that scenario shocks (oil, exchange rate, ...) can move those variables in the nowcast quarters instead of being
-    absorbed, and so that alternative rate paths are compared with the SAME shocks.
+def nowcast_to_shock(ctx, plan: Plan) -> Plan:
+    """Replace the current-quarter conditions (CPI, core CPI, exchange-rate nowcasts) by the shocks they imply in
+    this plan, so that scenario shocks (oil, exchange rate, ...) can move those variables in the nowcast quarters
+    instead of being absorbed, and so that alternative rate paths are compared with the SAME shocks.
 
-    rate_path: compute the implied shocks with this policy-rate path fixed (default: the plan as it is, i.e. under
-    the Taylor rule if the plan fixes no rate). Comparing rate options must use one set of implied shocks: if each
-    option re-implied its own shock to hit the CPI nowcast, a higher rate would 'need' a bigger cost-push shock in
-    the current quarter, which then carries into the next year and penalises the higher rate (found in the
-    robustness table on 25.10.2026, see docs/audit_2026-10-25.md)."""
+    The shocks are implied with the plan as it is: under the Taylor rule when the plan fixes no rate (the options
+    table, the optimiser and the robustness check all start from such a plan), or under the fixed baseline path in
+    scenario_plans (the scenarios then share the baseline's shocks). Comparing rate options must use one set of
+    implied shocks: if each option re-implied its own shock to hit the CPI nowcast, a higher rate would 'need' a
+    bigger cost-push shock in the current quarter, which then carries into the next year and penalises the higher
+    rate (found in the robustness table on 25.10.2026, see docs/audit_2026-10-25.md)."""
     cfg = ctx["cfg"]
     cond_q = {pd.Period(q, "Q") for q in getattr(cfg, "CPI_NOWCAST_CONDITION", [])} | set(ctx.get("fx_nowcast", {}))
     cond = [(var, shock) for var, shock in NOWCAST_PAIRS if any(p in cond_q for p in plan.exo.get(var, {}))]
     if not cond:
         return plan
-    ref = with_rate_path(plan, rate_path) if rate_path else plan
-    implied = run(ctx, ref).attrs["shocks"]
+    implied = run(ctx, plan).attrs["shocks"]
     out = plan.copy()
     for var, shock in cond:
         for per in list(out.exo.get(var, {})):

@@ -60,8 +60,11 @@ def rates():
 def fx():
     f, iv, res = overview.load("fx"), overview.load("interventions"), overview.load("reserves")
     fig, ax = pl.grid(1, 3, width=13, height=3.6)
-    pl.monthly_panel(ax[0], {"грн/€": f["грн/€"], "грн/$": f["грн/$"]}, "Офіційний курс", "середнє за місяць",
-                     start=START)
+    # the last month may be a month-to-date average (overview.build writes the span into the 'note' column)
+    note = str(f["note"].iloc[-1]) if "note" in f and isinstance(f["note"].iloc[-1], str) and f["note"].iloc[-1] else ""
+    span = note.split(";")[0].replace("середнє за ", "") if note else ""
+    unit = "середнє за місяць" + (f"; {f.index[-1].month:02d}.{str(f.index[-1].year)[2:]} — {span}" if span else "")
+    pl.monthly_panel(ax[0], {"грн/€": f["грн/€"], "грн/$": f["грн/$"]}, "Офіційний курс", unit, start=START)
     s = iv["Продаж"].loc["2025-01":] - iv["Купівля"].loc["2025-01":]
     pl.bar_panel(ax[1], s, "Чистий продаж валюти НБУ", "$ млрд",
                  labels=[p.strftime("%m.%y") if p.month in (1, 4, 7, 10) else "" for p in s.index])

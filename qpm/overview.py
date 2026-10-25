@@ -73,7 +73,7 @@ def build(start="2023-01", end="2026-09") -> dict[str, pd.DataFrame]:
     out["rates"] = rates
 
     # official rate up to today: the current month is a month-to-date average (flagged in the 'note' column), and the
-    # latest daily rate is kept for the slides — in October 2026 the hryvnia hit a record low vs USD (45.20 on 26.10)
+    # latest daily rate is kept for the slides — in October 2026 the hryvnia hit a record low vs USD (45.08 on 14.10)
     from datetime import date, timedelta
     # the NBU sets the next business day's rate the afternoon before, so ask up to tomorrow
     eur = fetch.nbu_fx("EUR", f"{start}-01", date.today() + timedelta(days=1))
@@ -83,7 +83,7 @@ def build(start="2023-01", end="2026-09") -> dict[str, pd.DataFrame]:
     fx["note"] = ""
     last_day = usd.index.max()
     if last_day != last_day.to_period("M").end_time.normalize():
-        fx.loc[fx.index[-1], "note"] = f"середнє за {last_day.strftime('%d.%m')} днів; останній курс {usd.iloc[-1]:.4f} грн/$ ({last_day.date()})"
+        fx.loc[fx.index[-1], "note"] = f"середнє за 1–{last_day.day}.{last_day.month:02d}; останній курс {usd.iloc[-1]:.4f} грн/$ ({last_day.date()})"
     out["fx"] = fx
     out["fx_daily"] = pd.DataFrame({"грн/€": eur, "грн/$": usd}).loc["2026-01-01":]
 

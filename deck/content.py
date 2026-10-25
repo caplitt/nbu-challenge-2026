@@ -67,7 +67,9 @@ VS = K["vs_nbu"]
 _qs = list(Q)
 _peak_q = max(_qs, key=lambda r: Q[r]["cpi_yoy"])
 back_q = next(q for q in _qs if q > _peak_q and Q[q]["cpi_yoy"] <= 5.25)
-first_target_q = next(q for i, q in enumerate(_qs) if all(abs(Q[r]["cpi_yoy"] - 5) <= 0.2 for r in _qs[i:]))
+# "at target" = within ±0.3 pp from here to the end of the horizon (the same tolerance as the test on the landing);
+# if the smoothed path never settles that close, the last forecast year is named
+first_target_q = next((q for i, q in enumerate(_qs) if all(abs(Q[r]["cpi_yoy"] - 5) <= 0.3 for r in _qs[i:])), _qs[-4])
 _after = [Q[q]["cpi_yoy"] for q in _qs if q >= back_q]
 band_lo, band_hi = min(_after), max(_after)
 dip28 = min(Q[f"2028Q{i}"]["cpi_yoy"] for i in range(1, 5))
@@ -168,7 +170,7 @@ SRC = {k: {"text": t, "url": u} for k, (t, u) in {
 }.items()}
 
 opt_lt = K["optimal_paths"]["λ = 1, без реакції на адмінціни"]
-DATA_CUTOFF = "24.10.2026"   # official FX rate for 26.10 (set on 24.10), Brent spot to 20.10 (FRED lag), futures close 24.10
+DATA_CUTOFF = "25.10.2026"   # date of retrieval: official FX rate to 25.10 (set on 23.10), Brent spot to 20.10 (FRED lag), futures close 24.10
 _cpi_m = pd.read_csv(ROOT / "data" / "overview" / "cpi.csv", index_col=0, encoding="utf-8-sig")
 _nc0 = table_csv("cpi_nowcast")
 nc_trend = float(_nc0["Тренд (SA)"].iloc[-1])
@@ -193,7 +195,9 @@ usd_now = float(_fxm["грн/$"].dropna().iloc[-1])          # October 2026 mont
 usd_last, usd_last_date = float(_fxd.iloc[-1]), pd.Timestamp(_fxd.index[-1]).strftime("%d.%m")
 usd_jun_sep = float(_fxm["грн/$"].loc["2026-06":"2026-09"].mean())   # the plateau before October
 usd_oct_max, usd_oct_max_date = float(_fxd.loc["2026-10"].max()), pd.Timestamp(_fxd.loc["2026-10"].idxmax()).strftime("%d.%m")
-usd_record = usd_oct_max >= float(_fxd.loc[:"2026-09-30"].max())   # October high = all-time low of the hryvnia?
+# October high = all-time low of the hryvnia? Compare with the daily history of 2026 and the monthly averages before
+# (a monthly average understates the daily high, but the pre-2026 peak of ≈42 is far below 45)
+usd_record = usd_oct_max >= max(float(_fxd.loc[:"2026-09-30"].max()), float(_fxm["грн/$"].loc[:"2025-12"].max()))
 fx_oct_text = (f"у жовтні — до {n(usd_oct_max, 2)} ({usd_oct_max_date}{', історичний мінімум гривні' if usd_record else ''}), "
                f"{usd_last_date} — {n(usd_last, 2)}")
 RN = K["reserves_nbu"]

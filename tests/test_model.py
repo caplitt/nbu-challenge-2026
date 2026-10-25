@@ -195,16 +195,23 @@ def test_brent_history_is_spot_only():
 
 
 def test_seasonal_window_does_not_let_one_month_write_its_own_factor():
-    """September 2026 (+2.1% m/m) must get a seasonal factor like the other Septembers in the same STL run: with the
-    chosen window the gap to the 2021–2025 mean is < 0.1 pp (with the statsmodels default 7 it was ≈0.5 pp)."""
-    from statsmodels.tsa.seasonal import STL
-    from qpm.data import SEASONAL_WINDOW
-    x = _monthly()["D_CPI_su_m"].dropna().loc["2010-01":]
-    lvl = np.log((1 + x / 100).cumprod())
-    res = STL(lvl.values, period=12, seasonal=SEASONAL_WINDOW[12], robust=False).fit()
-    s = pd.Series(res.seasonal, index=lvl.index).diff() * 100
-    sept = s[s.index.month == 9]
-    assert abs(float(sept.loc["2026-09"]) - float(sept.loc["2021-09":"2025-09"].mean())) < 0.1
+    """Through the production nowcast: September 2026 (+2.1% m/m) must keep most of its jump after seasonal
+    adjustment — SA m/m ≥ 1.55% (the statsmodels default window gave 1.32–1.35%, i.e. a third of the jump was called
+    seasonality), and the model data's SA September must agree with the nowcast's within 0.1 pp."""
+    from qpm.nowcast import cpi_nowcast
+    from qpm.data import read_data
+    nc = cpi_nowcast(data_dir=str(ROOT / "data"), **cfg.CPI_NOWCAST)   # CPI_NOWCAST carries `until`
+    sa = nc.attrs["sa_mom_last"]
+    sept = sa[pd.Period("2026-09", "M")]
+    assert sept >= 1.55, sa
+    # the same adjustment in the model data (qpm.data.seasonal_adjust uses the same window)
+    dm = _monthly()
+    x = dm["D_CPI_su_m"].dropna()
+    cpi = (1 + x / 100).cumprod()
+    from qpm.data import seasonal_adjust
+    sa_lvl = seasonal_adjust(cpi, 12)
+    sept_data = float((np.log(sa_lvl.loc[pd.Period("2026-09", "M")]) - np.log(sa_lvl.loc[pd.Period("2026-08", "M")])) * 100)
+    assert abs(sept_data - sept) < 0.1
 
 
 def test_fx_nowcast_condition_respected(ctx):
@@ -230,11 +237,20 @@ def test_robustness_and_options_use_the_same_shocks():
 
 
 def test_backtest_scores_only_observed_quarters():
-    """'Actual' in the backtest comes from published data only: from the 2025Q4 origin the 4th horizon (2026Q4) has
-    no data yet and must not be scored; GDP has one quarter less than CPI (2026Q3 is a nowcast)."""
+    """'Actual' in the backtest comes from published data only: the number of scored horizons equals the number of
+    forecast quarters for which the data file has an observation (CPI: full months only; GDP: quarterly file), so a
+    quarter the model projects (or a nowcast) is never used as 'actual'."""
+    from qpm.data import read_iris_csv
     err = pd.read_csv(ROOT / "results/tables/backtest_errors.csv", index_col=[0, 1], encoding="utf-8-sig")
     n = err["Кварталів з фактом"]
-    assert n.loc[("2025Q4", "ІСЦ, % р/р")] == 3
-    assert n.loc[("2025Q3", "ІСЦ, % р/р")] == 4
-    assert n.loc[("2025Q4", "ВВП, % р/р")] == 2
+    dm = _monthly()
+    months = dm["D_CPI_su_m"].dropna().index
+    full_q = months.asfreq("Q").value_counts()
+    last_cpi_q = max(q for q, c in full_q.items() if c == 3)
+    dq, _ = read_iris_csv(ROOT / "data/quarterly.csv")
+    last_gdp_q = dq["GDP"].dropna().index.max()
+    for origin in ("2025Q2", "2025Q3", "2025Q4"):
+        horizons = pd.period_range(pd.Period(origin, "Q") + 1, periods=4, freq="Q")
+        assert n.loc[(origin, "ІСЦ, % р/р")] == sum(h <= last_cpi_q for h in horizons), origin
+        assert n.loc[(origin, "ВВП, % р/р")] == sum(h <= last_gdp_q for h in horizons), origin
     assert (n <= 4).all()
