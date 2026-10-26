@@ -34,10 +34,12 @@ def cpi_nowcast(until: str, data_dir="data", trend_window=3, seasonal_years=5, a
     # gave implausible December factors (+0.6 pp headline, −0.6 pp core). Seasonal window as in seasonal_adjust
     # (13): with the statsmodels default (7) the newest month largely wrote its own seasonal factor — September 2026
     # (+2.1% m/m) got a factor of 0.75 pp against 0.1–0.3 for the Septembers of 2021–2025 in the same run, hiding a
-    # third of the jump inside "seasonality"; with 13 it gets 0.41 against 0.36–0.38. STL still revises the factors
-    # of the last cycle when a month is added (the 5-year average for September rises by ≈0.3 pp with September 2026
-    # in the sample, the one for October falls by ≈0.2 pp), which `factor_sample_end` avoids at the cost of ignoring
-    # the newest seasonal information.
+    # third of the jump inside "seasonality"; with 13 it gets 0.41 against 0.36–0.38 in the same run. That is not
+    # proof of stability: STL still revises the factors of the last cycle when a month is added (the Septembers of
+    # 2021–2025 rise from 0.32…−0.16 to 0.36–0.38 with September 2026 in the sample, the Octobers fall by ≈0.2 pp —
+    # October's factor in this nowcast is 0.24 against ≈0.47 without September 2026, worth ≈+0.2 pp on December),
+    # which `factor_sample_end` avoids at the cost of ignoring the newest seasonal information. Hence the
+    # sensitivity table in docs/audit_2026-10-25.md: December between 11.3% (window 7) and 13.1% (factors frozen).
     est = lvl if factor_sample_end is None else lvl.loc[:factor_sample_end]
     res = STL(est.values, period=12, seasonal=SEASONAL_WINDOW[12], robust=False).fit()
     seas = pd.Series(res.seasonal, index=est.index)

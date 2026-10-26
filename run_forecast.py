@@ -47,7 +47,8 @@ def main():
     scen = {name: pipeline.run(ctx, plan) for name, plan in pipeline.scenario_plans(ctx).items()}
     base = scen["Базовий"]
     rule = pipeline.run(ctx, pipeline.with_rate_path(base_plan, cfg.RECOMMENDED_RATE_PATH))
-    # UAH/USD for reporting (the model works with UAH/EUR): EUR/USD — NBU assumptions, flat after their horizon
+    # UAH/USD for reporting (the model works with UAH/EUR): USD/EUR — the last observed month (October 2026, 1.12)
+    # held flat over the horizon (update_data.update_oil); the NBU's July assumptions (1.16–1.19) are stale
     usd_eur = ctx["dq"]["USD_EUR"].ffill()
     for df in (*scen.values(), rule):
         df["uah_usd"] = df["uah_eur"] / usd_eur.reindex(df.index).ffill()
@@ -62,15 +63,35 @@ def main():
     fx_per = pd.period_range(f, "2027Q4", freq="Q")
     fx_path = [100 * np.log(usd_now * (1 + dep) ** ((k + 1) / 4) * float(usd_eur.reindex([q]).ffill().iloc[0]))
                for k, q in enumerate(fx_per)]
+    def uip_increment(per, l_er_path):
+        """UIP shocks that take UAH/EUR to `l_er_path` under the recommended decision, NET of the UIP shocks the plan
+        already carries (the Q4 2026 nowcast shock from nowcast_to_shock). The run returns the total shock and
+        Plan.shock adds, so only the increment may be passed on: until 25.10.2026 (found by the model reviewer) the
+        total was added on top of the fixed nowcast shock, the Q4 shock was counted twice and the hryvnia
+        APPRECIATED in Q4 2026 in the 'weaker hryvnia' scenario (test_fx_risk_scenario_weakens_the_hryvnia)."""
+        p_ = around.copy()
+        p_.exogenize("l_er", per, l_er_path)
+        p_.endogenize("res_l_er_uip", per)
+        total = pipeline.run(ctx, p_).attrs["shocks"]["res_l_er_uip"].reindex(per)
+        return total - pd.Series({p: around.shocks.get("res_l_er_uip", {}).get(p, 0.0) for p in per})
+
     # the FX risk is the UIP shock that produces the market path under the recommended decision; it then enters as a
     # shock, so the hryvnia still responds to the policy rate (with a fixed path the decision would hardly matter)
-    _fxp = around.copy()
-    _fxp.exogenize("l_er", fx_per, fx_path)
-    _fxp.endogenize("res_l_er_uip", fx_per)
-    uip_fx = pipeline.run(ctx, _fxp).attrs["shocks"]["res_l_er_uip"].reindex(fx_per)
+    uip_fx = uip_increment(fx_per, fx_path)
 
     def sc_fx(plan, f_, ctx_=None):
         plan.shock("res_l_er_uip", list(fx_per), list(uip_fx.values))
+        return plan
+
+    # the mirror of the audit's most influential change (USD/EUR 1.12 held flat): the euro back at the NBU's July
+    # assumption of 1.16 $ from 2027Q1 with UAH/USD as in the baseline, i.e. UAH/EUR weaker by 1.16/1.12 − 1 ≈ 3.4%,
+    # delivered by UIP shocks (the rate still matters). Oil in euro would then be ≈3% cheaper — ignored (w_oil 0.016)
+    eur_per = pd.period_range(f + 1, "2027Q4", freq="Q")
+    eur_path = [100 * np.log(float(base.loc[q, "uah_usd"]) * cfg.EUR_RISK_USD_PER_EUR) for q in eur_per]
+    uip_eur = uip_increment(eur_per, eur_path)
+
+    def sc_eur(plan, f_, ctx_=None):
+        plan.shock("res_l_er_uip", list(eur_per), list(uip_eur.values))
         return plan
 
     def sc_exp(plan, f_, ctx_=None):       # de-anchored expectations: core +1 pp (q/q annualised) every quarter of 2027
@@ -78,10 +99,12 @@ def main():
         return plan
 
     def sc_vat(plan, f_, ctx_=None):
-        """VAT 20 -> 21% from 2027: a one-off core cost-push shock of 1.5 (q/q annualised) in 2027Q1 lifts CPI y/y by
-        ≈0.54 pp at the peak (IRF: 0.8 -> 0.29, 1.2 -> 0.43, 1.5 -> 0.54) — the midpoint of the NBU's estimate of
-        +0.4–0.7 pp (Interfax, 17.09.2026). Until 25.10.2026 the shock was 0.8 with a comment claiming +0.54."""
-        plan.shock("res_dl_cpi_c", [pd.Period("2027Q1", "Q")], [1.5])
+        """VAT 20 -> 21% from 2027: a one-off core cost-push shock of 0.8 (q/q annualised) in 2027Q1. Measured the way
+        the scenario is run (anticipated shock on top of the baseline, the rule reacting), it lifts CPI y/y by ≈0.54 pp
+        at the peak (2027Q2) — the midpoint of the NBU's estimate of +0.4–0.7 pp (Interfax, 17.09.2026). The
+        unanticipated IRF of the same shock peaks at only +0.29 pp: the anticipated shock also raises inflation
+        before 2027Q1 through the forward-looking Phillips curve, so the calibration must be done in the scenario."""
+        plan.shock("res_dl_cpi_c", [pd.Period("2027Q1", "Q")], [0.8])
         return plan
 
     def sc_weak(plan, f_, ctx_=None):      # counterweight: demand weaker than assumed (attacks, fiscal consolidation)
@@ -92,15 +115,22 @@ def main():
         plan.shock("res_dl_cpi_c", [f_, f_ + 1], [-1.5, -0.75])
         return plan
 
-    RISKS = {"Курс як чекає ринок": sc_fx, "Розбалансування очікувань": sc_exp, "ПДВ 21% з 2027": sc_vat}
+    RISKS = {"Курс як чекає ринок": sc_fx, cfg.EUR_RISK_NAME: sc_eur, "Розбалансування очікувань": sc_exp,
+             "ПДВ 21% з 2027": sc_vat}
     COUNTER = {"Слабкий попит": sc_weak, "Базова сповільнюється": sc_core_down}
     risks = {}
     for name, fn in RISKS.items():
         rr = pipeline.run(ctx, fn(around.copy(), f, ctx))
-        rr["uah_usd"] = rr["uah_eur"] / usd_eur.reindex(rr.index).ffill()
+        ue = usd_eur.reindex(rr.index).ffill()
+        if name == cfg.EUR_RISK_NAME:              # in this scenario the dollar price of the euro is 1.16 from 2027Q1
+            ue[ue.index >= eur_per[0]] = cfg.EUR_RISK_USD_PER_EUR
+        rr["uah_usd"] = rr["uah_eur"] / ue
+        dev = (rr["cpi_yoy"] - base["cpi_yoy"]).loc[fc]          # largest lift of CPI y/y over the baseline, and when
         risks[name] = {"ІСЦ IV кв. 2027": _q(rr, "cpi_yoy", "2027Q4"), "ІСЦ пік": float(rr.loc[fc, "cpi_yoy"].max().round(2)),
+                       "Макс. +ІСЦ, в. п.": float(round(dev.max(), 2)), "Квартал макс.": str(dev.idxmax()),
                        "Базова IV кв. 2027": _q(rr, "core_yoy", "2027Q4"), "Ставка пік": float(rr.loc[fc, "ir_pol"].max().round(2)),
-                       "Курс IV кв. 2027, грн/$": _q(rr, "uah_usd", "2027Q4")}
+                       "Курс IV кв. 2027, грн/$": _q(rr, "uah_usd", "2027Q4"), "Курс IV кв. 2026, грн/$": _q(rr, "uah_usd", str(f)),
+                       "Курс IV кв. 2027, грн/€": _q(rr, "uah_eur", "2027Q4")}
     fx_risk = {"cpi_2027Q4": risks["Курс як чекає ринок"]["ІСЦ IV кв. 2027"], "rate_peak": risks["Курс як чекає ринок"]["Ставка пік"],
                "uah_usd_2027Q4": risks["Курс як чекає ринок"]["Курс IV кв. 2027, грн/$"], "dep_per_year": round(dep * 100, 1)}
     pd.DataFrame(risks).T.to_csv(TAB / "risks_extra.csv", encoding="utf-8-sig")
@@ -191,9 +221,10 @@ def main():
     for r in rob_opts:
         p_r = pipeline.policy_plan(ctx, base_plan, {q: r for q in cfg.HOLD})
         # the same nowcast shocks for every option (base_s: implied once, under the rule — as in optimal_path and in
-        # the options table). Re-implying them per option (the code until 25.10.2026) made a higher rate 'need' a
-        # bigger Q4 cost-push shock, which carried into 2027 and penalised 17.5–18% in this table only; the baseline
-        # row now equals the options table (see pipeline.nowcast_to_shock and docs/audit_2026-10-25.md)
+        # the options table). Re-implying them per option (the code until 25.10.2026) pinned Q4 inflation to the
+        # nowcast for every option, so a higher rate bought nothing in Q4 and paid the full smoothing penalty; the
+        # baseline row now equals the options table (pipeline.nowcast_to_shock, docs/audit_2026-10-25.md). The old
+        # convention is re-run below (rob_old) so the reader sees what hangs on it
         p_rs = pipeline.with_rate_path(base_s, {str(k): float(v) for k, v in p_r.exo["ir_pol"].items()})
         around_r = pipeline.rate_path_to_shock(ctx, p_rs, keep=[str(f)])
         for name, fn in rob_scen.items():
@@ -211,6 +242,51 @@ def main():
                        "best_E": {pk: min(v, key=v.get) for pk, v in e.items()}, "best_regret": float(reg.idxmin())}
     pd.DataFrame(rob["λ = 1"]).T.to_csv(TAB / "robust_losses.csv", encoding="utf-8-sig")
     print("Стійкість рішення (λ = 1):", rob_sum["λ = 1"])
+
+    # Sensitivity to the convention (the model reviewer's point, docs/audit_2026-10-25.md §2 row 1): the code until
+    # 25.10.2026 re-implied the nowcast shocks under each option ('the current quarter is a quasi-fact', so the
+    # decision cannot move Q4 inflation). Both conventions are used in practice; the one above is kept because it is
+    # the one the options table and the optimiser use. What hangs on it is reported here (λ = 1 only).
+    rob_old = {}
+    for r in rob_opts:
+        p_r = pipeline.policy_plan(ctx, base_plan, {q: r for q in cfg.HOLD})
+        around_o = pipeline.rate_path_to_shock(ctx, pipeline.nowcast_to_shock(ctx, p_r), keep=[str(f)])
+        for name, fn in rob_scen.items():
+            d = pipeline.run(ctx, around_o if fn is None else fn(around_o.copy(), f, ctx))
+            rob_old.setdefault(name, {})[r] = round(rob_loss(d, 1.0), 2)
+    t_old = pd.DataFrame(rob_old).T
+    e_old = {pk: {r: round(float(sum(t_old.loc[sn, r] * wgt for sn, wgt in pv.items())), 2) for r in rob_opts}
+             for pk, pv in cfg.ROBUST_PROBS.items()}
+    reg_old = t_old.sub(t_old.min(axis=1), axis=0).max()
+    rob_old_sum = {"Базовий": rob_old["Базовий"], "E": e_old, "best_E": {pk: min(v, key=v.get) for pk, v in e_old.items()},
+                   "best_regret": float(reg_old.idxmin())}
+    print("Стійкість за старою конвенцією (шоки наукасту під кожну ставку, λ = 1):", rob_old_sum)
+
+    # Sensitivity of the optimum to the exchange-rate assumption — the audit's most influential change (the Q4 2026
+    # nowcast: the hryvnia 2% stronger against the euro in October). Three alternatives, each as UIP shocks on top of
+    # the plans (the rate still matters): no FX nowcast at all; the October appreciation reversed in 2027Q1 (UAH/EUR
+    # back at the level the model gives without the nowcast); the euro back at 1.16 $ from 2027Q1 (the EUR risk).
+    ctx_nofx = {**ctx, "fx_nowcast": {}}
+    nofx_rec = pipeline.run(ctx_nofx, pipeline.policy_plan(ctx_nofx, pipeline.base_plan(ctx_nofx), cfg.RECOMMENDED_RATE_PATH))
+    uip_tmp = uip_increment([f + 1], [float(nofx_rec.loc[f + 1, "l_er"])])
+
+    def opt_with(ctx_, shocks):
+        rp, lp = pipeline.reaction_plan(ctx_), pipeline.base_plan(ctx_)
+        for sh, per, vals in shocks:
+            rp.shock(sh, per, vals)
+            lp.shock(sh, per, vals)
+        _, path_o, _ = optimal.optimal_path(ctx_, rp, w_smooth=cfg.TARGET_PATH["w_smooth"], landing_plan=lp, **tp)
+        rec = pipeline.run(ctx_, pipeline.policy_plan(ctx_, lp, cfg.RECOMMENDED_RATE_PATH))
+        return {"Оптимум IV кв. 2026": round(float(path_o[f]), 2), "Оптимум I кв. 2027": round(float(path_o[f + 1]), 2),
+                f"ІСЦ IV кв. 2027 за {cfg.RECOMMENDATION['rate']:g}%": _q(rec, "cpi_yoy", "2027Q4"),
+                "грн/€ I кв. 2027": _q(rec, "uah_eur", str(f + 1)), "грн/€ IV кв. 2027": _q(rec, "uah_eur", "2027Q4")}
+
+    fx_sens = {"Базовий (жовтневий курс у IV кв., далі модель)": opt_with(ctx, []),
+               "Без наукасту курсу": opt_with(ctx_nofx, []),
+               "Жовтневе зміцнення тимчасове (I кв. 2027 — рівень без наукасту)": opt_with(ctx, [("res_l_er_uip", [f + 1], list(uip_tmp.values))]),
+               f"{cfg.EUR_RISK_NAME} з I кв. 2027": opt_with(ctx, [("res_l_er_uip", list(eur_per), list(uip_eur.values))])}
+    pd.DataFrame(fx_sens).T.to_csv(TAB / "fx_sensitivity.csv", encoding="utf-8-sig")
+    print("Чутливість оптимуму до курсового припущення:", fx_sens)
     print("Найкращий варіант за вагою згладжування:", best_option)
     pol_tab = pd.DataFrame({
         name: {"Ставка IV кв. 2026": df.loc[f, "ir_pol"], "Ставка I кв. 2027": _q(df, "ir_pol", "2027Q1"),
@@ -288,6 +364,7 @@ def main():
         "best_option_by_lambda": best_option,
         "fx_risk": fx_risk, "risks_extra": risks,
         "robust": {"losses": rob, "summary": rob_sum, "probs": cfg.ROBUST_PROBS, "options": rob_opts},
+        "robust_old_convention": rob_old_sum, "fx_sensitivity": fx_sens,
         "rate_now": ctx["rate_now"],
         "best_hold_by_lambda": best_hold, "admin_reaction": cfg.ADMIN_REACTION,
         "brent_path": {q: round(float(ctx["dq"].loc[pd.Period(q, "Q"), "BRENT_USD"]), 1) for q in ("2026Q4", "2027Q4", "2028Q4")},

@@ -14,9 +14,11 @@ NO_LOG = ("IR_EA", "IR_POLICY")
 # STL seasonal window (loess span over the years of each calendar month) by series period.
 # Monthly: 13 instead of the statsmodels default 7 — with 7 the latest observation largely writes its own seasonal
 # factor: September 2026 (+2.1% m/m) got a factor of 0.75 pp against 0.1–0.3 pp for the Septembers of 2021–2025 in
-# the same run, so its SA value was 1.35% instead of ≈1.7%; with 13 the September 2026 factor is 0.41 pp against
-# 0.36–0.38 pp for 2021–2025. (Adding a month still revises the factors of the last cycle at the sample end — an STL
-# end-point property, see qpm.nowcast.) Quarterly (GDP, euro-area series): the default 7 (7 years).
+# the same run, so its SA value was 1.35% instead of ≈1.7%. With 13 the September 2026 factor is 0.41 pp against
+# 0.36–0.38 pp for 2021–2025 in the same run — but that is not proof of stability: adding September 2026 lifts the
+# whole September column by ≈0.3 pp (0.32…−0.16 without it) and lowers October's by ≈0.2 pp, an STL end-point
+# property that a wider window dampens but does not remove (qpm.nowcast; the December nowcast 12.1% sits between
+# 11.3% with window 7 and 13.1% with factors frozen at December 2025). Quarterly series: the default 7 (7 years).
 SEASONAL_WINDOW = {12: 13, 4: 7}
 
 
@@ -72,6 +74,9 @@ def seasonal_adjust(s: pd.Series, period: int, robust: bool = False, seasonal: i
 
 
 def hp_gap(s: pd.Series, lamb: float = 1600) -> pd.Series:
+    """HP cycle on the whole series as given — projections included. For the euro-area gap this means the ECB
+    projections to 2028 serve as the end-point of the historical gap (a small look into the future in the quasi-real-
+    time backtest; the gap enters demand with weight 0.3)."""
     x = s.dropna()
     cycle, _ = hpfilter(x.values, lamb=lamb)
     out = pd.Series(np.nan, index=s.index)

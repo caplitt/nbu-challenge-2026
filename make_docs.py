@@ -138,7 +138,14 @@ def qa():
         return round(x * 2) / 2
 
     qs = list(Q)
-    target_q = next(q for i, q in enumerate(qs) if all(abs(Q[r]["cpi_yoy"] - 5) <= 0.2 for r in qs[i:]))
+    # "at target" = within ±0.3 pp to the end of the horizon; target_year — the first FULL year after the peak with
+    # every quarter in tolerance (2028 undershoots), as in deck/content.py
+    target_q = next((q for i, q in enumerate(qs) if all(abs(Q[r]["cpi_yoy"] - 5) <= 0.3 for r in qs[i:])), qs[-4])
+    _pk = max(qs, key=lambda r: Q[r]["cpi_yoy"])
+    target_year = next((y for y in sorted({q[:4] for q in qs}) if y > _pk[:4] and sum(q[:4] == y for q in qs) == 4
+                        and all(abs(Q[q]["cpi_yoy"] - 5) <= 0.3 for q in qs if q[:4] == y)), target_q[:4])
+    fxs, rob_old = K["fx_sensitivity"], K["robust_old_convention"]
+    _fo = {k: v["Оптимум IV кв. 2026"] for k, v in fxs.items()}
     peak_q = max(qs, key=lambda r: Q[r]["cpi_yoy"])
     back_q = next(q for q in qs if q > peak_q and Q[q]["cpi_yoy"] <= 5.25)
     band = [Q[q]["cpi_yoy"] for q in qs if q >= back_q]
@@ -192,6 +199,14 @@ def qa():
         back_q=f"{roman[back_q[-1]]} кв. {back_q[:4]}", back_year=back_q[:4], band=f"{n(min(band))}–{n(max(band))}",
         core_dec=n(K["nowcast_core_dec_yoy"]), nbu_core26=n(nbu_v("Базова інфляція", "2026Q4")),
         exp_cpi27=n(rx["Розбалансування очікувань"]["ІСЦ IV кв. 2027"]), exp_rate=n(rx["Розбалансування очікувань"]["Ставка пік"]),
+        core_trend=n(float(pd.read_csv(TAB / "core_nowcast.csv", index_col=0, encoding="utf-8-sig")["Тренд (SA)"].iloc[-1])),
+        eur_cpi27=n(rx[cfg.EUR_RISK_NAME]["ІСЦ IV кв. 2027"]), eur_rate=n(rx[cfg.EUR_RISK_NAME]["Ставка пік"]),
+        eur_pct=n((cfg.EUR_RISK_USD_PER_EUR / float(pd.read_csv(ROOT / "data" / "foreign.csv", index_col=0).loc["2027Q1", "USD_EUR"]) - 1) * 100), n_scen=len(K["robust"]["losses"]["λ = 1"]),
+        fxs_nofx=n(_fo["Без наукасту курсу"]), fxs_tmp=n(_fo["Жовтневе зміцнення тимчасове (I кв. 2027 — рівень без наукасту)"]),
+        fxs_eur=n(_fo[f"{cfg.EUR_RISK_NAME} з I кв. 2027"]), fxs_hi=n(max(_fo.values())), fxs_lo=n(min(_fo.values())),
+        fxs_nofx_cpi=n(fxs["Без наукасту курсу"][f"ІСЦ IV кв. 2027 за {cfg.RECOMMENDATION['rate']:g}%"]),
+        rob_old_E1=n(rob_old["best_E"]["P1"]), rob_old_E2=n(rob_old["best_E"]["P2"]), rob_old_reg=n(rob_old["best_regret"]),
+        oil_27=n(SC["Нафта $120"]["ІСЦ IV кв. 2027"] - SC["Базовий"]["ІСЦ IV кв. 2027"]),
         vat_peak=n(rx["ПДВ 21% з 2027"]["ІСЦ пік"]), vat_rate=n(rx["ПДВ 21% з 2027"]["Ставка пік"]),
         best_l1=n(K["best_hold_by_lambda"]["λ = 1"]),
         rob_E1=n(K["robust"]["summary"]["λ = 1"]["best_E"]["P1"]), rob_E2=n(K["robust"]["summary"]["λ = 1"]["best_E"]["P2"]),
@@ -216,7 +231,7 @@ def qa():
         gdp29=n(A["2029"]["Реальний ВВП, % (рік)"]), gdp27_16=n(PO["Утримати 16%"]["ВВП 2027, %"]),
         nbu_r27=n(vs["2027"]["Ставка IV кв., НБУ липень"]), nbu_r28=n(vs["2028"]["Ставка IV кв., НБУ липень"]),
         r27x=n(Q["2027Q4"]["ir_pol"]),
-        date=date.today(), rate=n(cfg.RECOMMENDATION["rate"], 0 if cfg.RECOMMENDATION["rate"] % 1 == 0 else 1), last_year=cfg.LAST_FORE[:4], target_year=target_q[:4],
+        date=date.today(), rate=n(cfg.RECOMMENDATION["rate"], 0 if cfg.RECOMMENDATION["rate"] % 1 == 0 else 1), last_year=cfg.LAST_FORE[:4], target_year=target_year,
         target_q=f"{roman[target_q[-1]]} кв. {target_q[:4]}", dec=n(K["nowcast_dec_yoy"]),
         opt_lt=n(OP["λ = 1, без реакції на адмінціни"]["2026Q4"]), opt_l2=n(OP["λ = 2"]["2026Q4"]), opt_l1=n(OP["λ = 1"]["2026Q4"]),
         loss_rec=n(PO[rec][loss]), loss_16=n(PO["Утримати 16%"][loss]),

@@ -236,6 +236,20 @@ def test_robustness_and_options_use_the_same_shocks():
             assert base_row[rate] == pytest.approx(row["Втрати, λ = 1"], abs=0.05), name
 
 
+def test_fx_risk_scenario_weakens_the_hryvnia():
+    """'Курс як чекає ринок' adds the UIP-shock INCREMENT on top of the Q4 2026 nowcast shock. Until 25.10.2026 the
+    total implied shock was added to the fixed nowcast shock (Plan.shock adds), the Q4 shock was counted twice and the
+    hryvnia appreciated in Q4 2026 in the 'weaker hryvnia' scenario (found by the model reviewer)."""
+    key = json.loads((ROOT / "results/key_numbers.json").read_text(encoding="utf-8"))
+    b, rx = key["baseline_quarterly"], key["risks_extra"]["Курс як чекає ринок"]
+    assert rx["Курс IV кв. 2026, грн/$"] >= b["2026Q4"]["uah_usd"] - 0.02
+    assert rx["Курс IV кв. 2027, грн/$"] > b["2027Q4"]["uah_usd"] + 0.5
+    assert rx["ІСЦ IV кв. 2027"] > b["2027Q4"]["cpi_yoy"] + 0.5
+    eur = key["risks_extra"][cfg.EUR_RISK_NAME]        # the euro back at 1.16 $: UAH/EUR ≈3% weaker, inflation higher
+    assert eur["Курс IV кв. 2027, грн/€"] > b["2027Q4"]["uah_eur"] * 1.02
+    assert eur["ІСЦ IV кв. 2027"] > b["2027Q4"]["cpi_yoy"] + 0.5
+
+
 def test_backtest_scores_only_observed_quarters():
     """'Actual' in the backtest comes from published data only: the number of scored horizons equals the number of
     forecast quarters for which the data file has an observation (CPI: full months only; GDP: quarterly file), so a

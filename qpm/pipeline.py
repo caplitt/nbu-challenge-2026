@@ -176,9 +176,11 @@ def nowcast_to_shock(ctx, plan: Plan) -> Plan:
     The shocks are implied with the plan as it is: under the Taylor rule when the plan fixes no rate (the options
     table, the optimiser and the robustness check all start from such a plan), or under the fixed baseline path in
     scenario_plans (the scenarios then share the baseline's shocks). Comparing rate options must use one set of
-    implied shocks: if each option re-implied its own shock to hit the CPI nowcast, a higher rate would 'need' a
-    bigger cost-push shock in the current quarter, which then carries into the next year and penalises the higher
-    rate (found in the robustness table on 25.10.2026, see docs/audit_2026-10-25.md)."""
+    implied shocks: if each option re-implied its own shock to hit the CPI nowcast, the decision could not move
+    current-quarter inflation at all (every option 'lands' on the nowcast) while paying the full smoothing penalty,
+    so the higher rates were penalised in the robustness table until 25.10.2026. That is a convention ('the current
+    quarter is a quasi-fact'), not an error; this one is used because the options table and the optimiser use it.
+    What hangs on it is reported in key_numbers.robust_old_convention (docs/audit_2026-10-25.md §2)."""
     cfg = ctx["cfg"]
     cond_q = {pd.Period(q, "Q") for q in getattr(cfg, "CPI_NOWCAST_CONDITION", [])} | set(ctx.get("fx_nowcast", {}))
     cond = [(var, shock) for var, shock in NOWCAST_PAIRS if any(p in cond_q for p in plan.exo.get(var, {}))]
