@@ -199,6 +199,7 @@ def qa():
         back_q=f"{roman[back_q[-1]]} кв. {back_q[:4]}", back_year=back_q[:4], band=f"{n(min(band))}–{n(max(band))}",
         core_dec=n(K["nowcast_core_dec_yoy"]), nbu_core26=n(nbu_v("Базова інфляція", "2026Q4")),
         exp_cpi27=n(rx["Розбалансування очікувань"]["ІСЦ IV кв. 2027"]), exp_rate=n(rx["Розбалансування очікувань"]["Ставка пік"]),
+        usd27_lvl=n(Q["2027Q4"]["uah_usd"]), gap27=n(sum(Q[f"2027Q{i}"]["l_gdp_gap"] for i in range(1, 5)) / 4),
         core_trend=n(float(pd.read_csv(TAB / "core_nowcast.csv", index_col=0, encoding="utf-8-sig")["Тренд (SA)"].iloc[-1])),
         eur_cpi27=n(rx[cfg.EUR_RISK_NAME]["ІСЦ IV кв. 2027"]), eur_rate=n(rx[cfg.EUR_RISK_NAME]["Ставка пік"]),
         eur_pct=n((cfg.EUR_RISK_USD_PER_EUR / float(pd.read_csv(ROOT / "data" / "foreign.csv", index_col=0).loc["2027Q1", "USD_EUR"]) - 1) * 100), n_scen=len(K["robust"]["losses"]["λ = 1"]),
