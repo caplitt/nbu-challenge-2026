@@ -11,6 +11,16 @@ from statsmodels.tsa.seasonal import STL
 
 NO_LOG = ("IR_EA", "IR_POLICY")
 
+# STL seasonal window (loess span over the years of each calendar month) by series period.
+# Monthly: 13 instead of the statsmodels default 7 — with 7 the latest observation largely writes its own seasonal
+# factor: September 2026 (+2.1% m/m) got a factor of 0.75 pp against 0.1–0.3 pp for the Septembers of 2021–2025 in
+# the same run, so its SA value was 1.35% instead of ≈1.7%. With 13 the September 2026 factor is 0.41 pp against
+# 0.36–0.38 pp for 2021–2025 in the same run — but that is not proof of stability: adding September 2026 lifts the
+# whole September column by ≈0.3 pp (0.32…−0.16 without it) and lowers October's by ≈0.2 pp, an STL end-point
+# property that a wider window dampens but does not remove (qpm.nowcast; the December nowcast 12.1% sits between
+# 11.3% with window 7 and 13.1% with factors frozen at December 2025). Quarterly series: the default 7 (7 years).
+SEASONAL_WINDOW = {12: 13, 4: 7}
+
 
 def _parse_period(s: str) -> pd.Period:
     s = s.strip()
@@ -49,20 +59,24 @@ def write_iris_csv(df: pd.DataFrame, path, comments: dict | None = None):
                           encoding="utf-8")
 
 
-def seasonal_adjust(s: pd.Series, period: int, robust: bool = False) -> pd.Series:
+def seasonal_adjust(s: pd.Series, period: int, robust: bool = False, seasonal: int | None = None) -> pd.Series:
     """Multiplicative seasonal adjustment with STL on logs (stand-in for IRIS x12).
 
     Not robust by default: robust STL down-weights the 2022 war shock as outliers and then mis-estimates the
     changed seasonal pattern of core prices — SA core CPI kept a Q2 dip (0–3% q/q ann. in 2023–2025 vs ~10% in
-    other quarters) that showed up as offsetting core / non-core shocks of ±7 pp."""
+    other quarters) that showed up as offsetting core / non-core shocks of ±7 pp.
+    `seasonal` — STL seasonal window; default SEASONAL_WINDOW[period] (see the note there)."""
     x = s.dropna()
-    res = STL(np.log(x.values), period=period, robust=robust).fit()
+    res = STL(np.log(x.values), period=period, seasonal=seasonal or SEASONAL_WINDOW.get(period, 7), robust=robust).fit()
     out = pd.Series(np.nan, index=s.index)
     out.loc[x.index] = np.exp(np.log(x.values) - res.seasonal)
     return out
 
 
 def hp_gap(s: pd.Series, lamb: float = 1600) -> pd.Series:
+    """HP cycle on the whole series as given — projections included. For the euro-area gap this means the ECB
+    projections to 2028 serve as the end-point of the historical gap (a small look into the future in the quasi-real-
+    time backtest; the gap enters demand with weight 0.3)."""
     x = s.dropna()
     cycle, _ = hpfilter(x.values, lamb=lamb)
     out = pd.Series(np.nan, index=s.index)
@@ -71,17 +85,24 @@ def hp_gap(s: pd.Series, lamb: float = 1600) -> pd.Series:
 
 
 def read_data(data_dir="data", cpi_nowcast: dict | None = None, gdp_nowcast: dict | None = None,
-              core_nowcast: dict | None = None) -> pd.DataFrame:
+              core_nowcast: dict | None = None, cutoff: str | None = None) -> pd.DataFrame:
     """Return the quarterly databank `dq` as a01_read_data.m builds it.
 
     cpi_nowcast: {"2026-09": m-o-m %, ...} fills months without data (actual data always wins).
     gdp_nowcast: {"2026Q3": q-o-q % SA, ...} fills quarters without GDP data.
     core_nowcast: {"2026-10": m-o-m %, ...} — the same for core CPI.
+    cutoff: last quarter of domestic data to keep (e.g. "2025Q3" for a quasi-real-time backtest): later months and
+        quarters are dropped BEFORE seasonal adjustment, so the SA factors do not use data the forecaster could not
+        have seen. Foreign series are kept (they are taken as realised in the backtest).
     """
     data_dir = Path(data_dir)
     dm, _ = read_iris_csv(data_dir / "monthly.csv")
     dq, _ = read_iris_csv(data_dir / "quarterly.csv")
     dx, _ = read_iris_csv(data_dir / "foreign.csv")
+    if cutoff is not None:
+        cq = pd.Period(cutoff, "Q")
+        dm = dm.loc[: cq.asfreq("M", "end")]
+        dq = dq.loc[:cq]
     nowcast_months = []
     for m, v in (cpi_nowcast or {}).items():
         p = pd.Period(m, "M")

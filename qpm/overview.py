@@ -30,7 +30,8 @@ SOURCES = {
     "cpi_components": "НБУ, Інфляційний звіт (липень 2026), графік 1.2; липень–вересень 2026 — коментарі НБУ щодо інфляції",
     "expectations": "НБУ, Інфляційний звіт (липень 2026), графік 1.8",
     "rates": "API НБУ (облікова ставка); депозитні ставки — Інфляційний звіт (липень 2026), графік 3.1",
-    "fx": "Офіційний курс НБУ (API), середній за місяць",
+    "fx": "Офіційний курс НБУ (API), середній за місяць; останній місяць — до дати оновлення (колонка note)",
+    "fx_daily": "Офіційний курс НБУ (API), щоденно з 2026 р. — для останнього курсу на слайдах",
     "interventions": "API НБУ (statdirectory/kursf), чисті інтервенції за місяць",
     "reserves": "API НБУ (statdirectory/res), офіційні резервні активи на кінець місяця",
     "gdp": "Держстат (реальний ВВП, SA); прогноз НБУ — таблиця макропрогнозу (липень 2026)",
@@ -38,7 +39,6 @@ SOURCES = {
     "wages": "НБУ, Інфляційний звіт (липень 2026), графік 1.13",
     "fiscal": "НБУ, макропрогноз (липень 2026): припущення та зведений бюджет",
     "energy": "НБУ, Інфляційний звіт (липень 2026), графік 4.1 (припущення щодо цін на нафту та газ)",
-    "brent": "FRED (EIA), DCOILBRENTEU, середнє за місяць",
     "nbu_forecast": "НБУ, таблиця макропрогнозу (липень 2026)",
     "fx_market_households": "API НБУ (statdirectory/kursf): операції населення з валютою, $ млрд за місяць",
 }
@@ -72,11 +72,20 @@ def build(start="2023-01", end="2026-09") -> dict[str, pd.DataFrame]:
     rates = rates.join(dep.drop(columns=["Облікова ставка"], errors="ignore"), how="left")
     out["rates"] = rates
 
-    eur = fetch.nbu_fx("EUR", f"{start}-01", pd.Period(end, "M").end_time.date())
-    usd = fetch.nbu_fx("USD", f"{start}-01", pd.Period(end, "M").end_time.date())
+    # official rate up to today: the current month is a month-to-date average (flagged in the 'note' column), and the
+    # latest daily rate is kept for the slides — in October 2026 the hryvnia hit a record low vs USD (45.08 on 14.10)
+    from datetime import date, timedelta
+    # the NBU sets the next business day's rate the afternoon before, so ask up to tomorrow
+    eur = fetch.nbu_fx("EUR", f"{start}-01", date.today() + timedelta(days=1))
+    usd = fetch.nbu_fx("USD", f"{start}-01", date.today() + timedelta(days=1))
     fx = pd.DataFrame({"грн/€": eur, "грн/$": usd}).resample("ME").mean()
     fx.index = fx.index.to_period("M")
+    fx["note"] = ""
+    last_day = usd.index.max()
+    if last_day != last_day.to_period("M").end_time.normalize():
+        fx.loc[fx.index[-1], "note"] = f"середнє за 1–{last_day.day}.{last_day.month:02d}; останній курс {usd.iloc[-1]:.4f} грн/$ ({last_day.date()})"
     out["fx"] = fx
+    out["fx_daily"] = pd.DataFrame({"грн/€": eur, "грн/$": usd}).loc["2026-01-01":]
 
     rows = []
     for p in pd.period_range(start, end, freq="M"):
@@ -122,14 +131,8 @@ def build(start="2023-01", end="2026-09") -> dict[str, pd.DataFrame]:
     out["fiscal"] = fiscal
 
     out["energy"] = read_ir_chart("4.1")
-    try:
-        brent = fetch.fred("DCOILBRENTEU", f"{start}-01").resample("ME").mean()
-        brent.index = brent.index.to_period("M")
-        out["brent"] = brent.loc[start:end].to_frame("Brent, $/бар.")
-    except Exception as e:  # FRED is often slow for scripts; keep the last saved copy
-        print(f"Brent (FRED) недоступний: {type(e).__name__}; використовую збережений файл, якщо він є")
-        if (OUT / "brent.csv").exists():
-            out["brent"] = load("brent")
+    # Brent for the overview comes from the same file the model uses (data/raw/brent_monthly.csv, update_data.py):
+    # one source for every chart and slide
     out["nbu_forecast"] = fc
 
     hh = []
@@ -145,7 +148,11 @@ def build(start="2023-01", end="2026-09") -> dict[str, pd.DataFrame]:
     for name, df in out.items():
         df.to_csv(OUT / f"{name}.csv", encoding="utf-8-sig")
     (OUT / "SOURCES.md").write_text("# Джерела даних для огляду\n\n" +
-                                    "\n".join(f"- `{k}.csv` — {v}" for k, v in SOURCES.items()) + "\n",
+                                    "\n".join(f"- `{k}.csv` — {v}" for k, v in SOURCES.items()) +
+                                    "\n- Brent для огляду — `data/raw/brent_monthly.csv` (спот EIA, див. `update_data.py`)\n"
+                                    "- Ряд `gdp.csv` — % р/р із сезонно скоригованих рівнів (шаблон НБУ + ланцюгування кв/кв "
+                                    "за Держстатом); офіційні несезонні темпи Держстату відрізняються (I кв. 2026 −0,6%, "
+                                    "II кв. +0,4% р/р після перегляду у вересні 2026)\n",
                                     encoding="utf-8")
     return out
 

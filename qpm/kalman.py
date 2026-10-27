@@ -62,28 +62,35 @@ def kalman_smoother(model: Model, data: pd.DataFrame, periods: pd.PeriodIndex,
         if mv in data.columns:
             Y[:, i] = data[mv].reindex(periods).values
 
+    # Forward pass (Kalman filter). State equation s_t = T s_{t-1} + C + R e_t, measurement Y_t = Z s_t + d.
+    # Missing observations (NaN) are simply skipped for that period — this is how the filter fills the gaps and the
+    # forecast horizon (IRIS does the same). Measurement equations are exact (no measurement noise), so the data are
+    # reproduced to numerical precision and all variation is attributed to the shocks.
     a, P = _initial(model, np.diag(stds[0] ** 2))
     a_pred = np.zeros((nper, n)); P_pred = np.zeros((nper, n, n))
     store = []
     for t in range(nper):
-        Qt = np.diag(stds[t] ** 2)
-        a = T @ a + C
+        Qt = np.diag(stds[t] ** 2)                 # shock variances this period (tunes can change them)
+        a = T @ a + C                              # prediction step
         P = T @ P @ T.T + R @ Qt @ R.T
         a_pred[t], P_pred[t] = a, P
         obs = ~np.isnan(Y[t])
-        if obs.any():
+        if obs.any():                              # update step with the observed rows only
             Zt = Z[obs]
-            v = Y[t, obs] - Zt @ a - d[obs]
+            v = Y[t, obs] - Zt @ a - d[obs]        # innovation
             F = Zt @ P @ Zt.T
             Finv = np.linalg.inv(F)
-            Kf = P @ Zt.T @ Finv
+            Kf = P @ Zt.T @ Finv                   # Kalman gain
             a = a + Kf @ v
             P = P - Kf @ Zt @ P
-            P = 0.5 * (P + P.T)
+            P = 0.5 * (P + P.T)                    # keep P symmetric against round-off
             store.append((Zt, v, Finv, Kf))
         else:
             store.append(None)
 
+    # Backward pass (Durbin–Koopman fixed-interval smoother): r and N accumulate information from later periods;
+    # the smoothed state is the prediction corrected by P r, the smoothed shock is Q R' r (shocks are recovered
+    # from the same r, which is why observed series are fully explained by shocks).
     r = np.zeros(n); N = np.zeros((n, n))
     s_hat = np.zeros((nper, n)); e_hat = np.zeros((nper, len(model.shocks)))
     V = np.zeros((nper, n))
@@ -98,7 +105,7 @@ def kalman_smoother(model: Model, data: pd.DataFrame, periods: pd.PeriodIndex,
             r_b = Zt.T @ Finv @ v + L.T @ r
             N_b = Zt.T @ Finv @ Zt + L.T @ N @ L
         s_hat[t] = a_pred[t] + P_pred[t] @ r_b
-        V[t] = np.diag(P_pred[t] - P_pred[t] @ N_b @ P_pred[t])
+        V[t] = np.diag(P_pred[t] - P_pred[t] @ N_b @ P_pred[t])   # smoothed state variance (for std bands)
         e_hat[t] = (stds[t] ** 2) * (R.T @ r_b)
         r, N = r_b, N_b
 

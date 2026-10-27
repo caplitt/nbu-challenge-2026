@@ -4,6 +4,7 @@
          python make_overview_charts.py --fetch  # спершу завантажити свіжі дані
 Результат: results/figures/ov_*.png
 """
+import re
 import sys
 from pathlib import Path
 
@@ -59,8 +60,11 @@ def rates():
 def fx():
     f, iv, res = overview.load("fx"), overview.load("interventions"), overview.load("reserves")
     fig, ax = pl.grid(1, 3, width=13, height=3.6)
-    pl.monthly_panel(ax[0], {"грн/€": f["грн/€"], "грн/$": f["грн/$"]}, "Офіційний курс", "середнє за місяць",
-                     start=START)
+    # the last month may be a month-to-date average (overview.build writes the span into the 'note' column)
+    note = str(f["note"].iloc[-1]) if "note" in f and isinstance(f["note"].iloc[-1], str) and f["note"].iloc[-1] else ""
+    span = note.split(";")[0].replace("середнє за ", "") if note else ""
+    unit = "середнє за місяць" + (f"; {f.index[-1].month:02d}.{str(f.index[-1].year)[2:]} — {span}" if span else "")
+    pl.monthly_panel(ax[0], {"грн/€": f["грн/€"], "грн/$": f["грн/$"]}, "Офіційний курс", unit, start=START)
     s = iv["Продаж"].loc["2025-01":] - iv["Купівля"].loc["2025-01":]
     pl.bar_panel(ax[1], s, "Чистий продаж валюти НБУ", "$ млрд",
                  labels=[p.strftime("%m.%y") if p.month in (1, 4, 7, 10) else "" for p in s.index])
@@ -175,14 +179,18 @@ def external():
     fig, ax = pl.grid(1, 2, height=3.6)
     pl.line_panel(ax[0], {"Інфляція HICP, % р/р": hicp, "Ставка ЄЦБ (депозитна), %": dx["IR_EA"].loc["2023Q1":"2028Q4"]},
                   "Єврозона", first_assump, target=2, target_label="ціль ЄЦБ 2%", rng=("2023Q1", "2028Q4"))
-    # Brent: monthly actual, futures curve (model assumption) and NBU's July assumption (quarterly)
-    b = pd.read_csv("data/raw/brent_monthly.csv", index_col=0)["brent_usd"]
+    # Brent: monthly EIA spot (the last month is month-to-date — labelled), futures curve (model assumption) and
+    # NBU's July assumption (quarterly)
+    braw = pd.read_csv("data/raw/brent_monthly.csv", index_col=0)
+    b = braw["brent_usd"]
     b.index = pd.PeriodIndex(b.index, freq="M")
     fut = dx["BRENT_USD"].loc["2026Q4":"2028Q4"]
     nbu = overview.load("energy")["Brent (поточний прогноз)"]
     a = ax[1]
     act = b.loc["2023-01":]
-    a.plot(act.index.to_timestamp(), act.values, color=pl.SERIES[0], label="Факт (середнє за місяць)")
+    mtd = re.search(r"to \d{4}-(\d{2})-(\d{2})", str(braw["source"].iloc[-1]))
+    act_label = "Спот EIA (середнє за місяць" + (f"; {b.index[-1].month:02d}.{str(b.index[-1].year)[2:]} — до {mtd.group(2)}.{mtd.group(1)})" if mtd else ")")
+    a.plot(act.index.to_timestamp(), act.values, color=pl.SERIES[0], label=act_label)
     a.plot([p.asfreq("M", "end").to_timestamp() for p in fut.index], fut.values, color=pl.SERIES[1], marker="o", ms=4,
            mec=pl.INK["surface"], label="Ф'ючерсна крива (наше припущення)")
     a.plot([p.asfreq("M", "end").to_timestamp() for p in nbu.index], nbu.values, color=pl.SERIES[2], marker="o", ms=4,

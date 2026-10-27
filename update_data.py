@@ -3,6 +3,13 @@
 Запуск:  python update_data.py
 Пише data/monthly.csv, data/quarterly.csv, data/foreign.csv, сирі дані в data/raw/ і журнал data/UPDATE_LOG.md.
 Історію з шаблону НБУ не переписуємо — лише додаємо нові місяці/квартали і звіряємо перекриття.
+
+Що робить кожен крок (і чому саме так):
+  update_monthly  — ІСЦ, базовий ІСЦ, облікова ставка, курс грн/€ до CUTOFF_MONTH (повні місяці); денний курс —
+                    до сьогодні, бо з нього рахується наукаст курсу на поточний квартал (config.FX_NOWCAST);
+  update_quarterly — ВВП: шаблон + ручні оновлення Держстату (GDP_UPDATES), бо API для ВВП немає;
+  update_foreign  — єврозона (факт + прогноз ЄЦБ) і нафта (спот EIA + ф'ючерсна крива NYMEX, USD/EUR ЄЦБ).
+За проксі з власним сертифікатом FRED потребує REQUESTS_CA_BUNDLE (див. qpm.fetch.fred).
 """
 from __future__ import annotations
 
@@ -22,6 +29,16 @@ RAW = OUT / "raw"
 # Останній повний місяць, який беремо (дата відсічення даних)
 CUTOFF_MONTH = "2026-09"
 
+# Помилки знаку в місячному базовому ІСЦ у файлі НБУ CCPI_m.xlsx (і в полі м/м API НБУ за 2016-08): офіційні
+# кумулятивні (з початку року) та річні темпи в тому самому запиті API дають протилежний знак, і лише з виправленням
+# ланцюг грудень/грудень збігається з річною базовою інфляцією Держстату (2016: 5,8%, 2019: 3,9%; з файлу виходило
+# 6,5% і 4,3%). Виявлено під час аудиту 25.10.2026 (docs/audit_2026-10-25.md).
+CORE_CPI_FIXES = {
+    "2016-08": (-0.3, "у файлі +0,3; API: з початку року 2,6% (липень) → 2,3% (серпень), р/р 7,9% → 7,4%"),
+    "2019-07": (-0.1, "у файлі +0,1; API: м/м −0,1, з початку року 2,3% (червень) → 2,2% (липень)"),
+    "2019-08": (-0.1, "у файлі +0,1; API: м/м −0,1, з початку року 2,2% → 2,1%"),
+}
+
 # Реальний ВВП: ручні оновлення (q/q з урахуванням сезонності, %). Джерело — Держстат.
 # Перевірте уточнену оцінку Держстату (вересень) і виправте, якщо змінилась.
 GDP_UPDATES = {
@@ -32,21 +49,26 @@ GDP_UPDATES = {
 # Припущення для єврозони на горизонті прогнозу (після останніх фактичних даних).
 # HICP і ВВП — середньорічні прирости за прогнозом ЄЦБ (вересень 2026): у кожному році
 # невідомі квартали ростуть з однаковим темпом так, щоб середньорічний приріст дорівнював цілі.
-# Ставка ЄЦБ — на кінець кварталу; ринок закладав ≈ +85 б.п. до кінця 2027 (від 2,25%).
+# Ставка ЄЦБ — на кінець кварталу: 2,5% з 16.09.2026; технічні припущення того самого прогнозу ЄЦБ (ринкова крива
+# на дату відсічення) дають 3-місячний EURIBOR ≈3,0% у 2027–2028, тобто ще ≈+0,5 в. п. і далі без змін.
+# (До 25.10.2026 тут стояло зниження до 2,5% у 2028 р. «за OIS» без джерела — прибрано після аудиту.)
 EA_ASSUMPTIONS = {
-    "source": "ECB staff macroeconomic projections, September 2026; ринкові очікування (OIS) перед засіданням ЄЦБ 10.09.2026",
+    "source": "ECB staff macroeconomic projections, September 2026 (HICP, ВВП; технічні припущення: EURIBOR 3M ≈3,0% у 2027–2028)",
     "hicp_annual": {2026: 3.0, 2027: 2.5, 2028: 2.1},
     "gdp_annual": {2026: 0.9, 2027: 1.4, 2028: 1.5},
     "dfr": {"2026Q4": 2.75, "2027Q1": 3.0, "2027Q2": 3.0, "2027Q3": 3.0, "2027Q4": 3.0,
-            "2028Q1": 2.75, "2028Q2": 2.75, "2028Q3": 2.5, "2028Q4": 2.5},
+            "2028Q1": 3.0, "2028Q2": 3.0, "2028Q3": 3.0, "2028Q4": 3.0},
 }
 
-# Нафта Brent: факт (EIA spot через DBnomics + ф'ючерси найближчого місяця, Yahoo) до останнього повного кварталу;
-# далі — ф'ючерсна крива (NYMEX BZ) на дату оновлення. Курс USD/EUR: факт (ЄЦБ), далі — припущення НБУ
-# (у середньому 1,16 у 2026, 1,18 у 2027, 1,19 у 2028 — макропрогноз, липень 2026).
+# Нафта Brent: спот EIA (місячні середні; поточний місяць — середнє до дати оновлення) до останнього повного кварталу;
+# далі — ф'ючерсна крива NYMEX BZ на дату оновлення; у першому прогнозному кварталі фактичні місяці беруться як є,
+# а решта — за ф'ючерсом (див. update_oil). Курс USD/EUR: факт (ЄЦБ), далі — останній місяць (до дати оновлення)
+# без змін, як прийнято для курсів (випадкове блукання). Для порівняння в журналі: припущення НБУ з липневого
+# макропрогнозу (1,16 / 1,18 / 1,19 у 2026–2028) — застаріли після падіння EUR/USD до ≈1,12 у жовтні 2026.
 OIL_ASSUMPTIONS = {
-    "usd_per_eur": {2026: 1.16, 2027: 1.18, 2028: 1.19},
-    "source": "Brent: EIA (DBnomics), ф'ючерси NYMEX BZ (Yahoo Finance); USD/EUR: ЄЦБ, припущення НБУ (липень 2026)",
+    "usd_per_eur_nbu": {2026: 1.16, 2027: 1.18, 2028: 1.19},
+    "source": "Brent: EIA (FRED MCOILBRENTEU / DCOILBRENTEU, DBnomics), ф'ючерси NYMEX BZ (Yahoo Finance); "
+              "USD/EUR: ЄЦБ (останній місяць без змін)",
 }
 
 
@@ -65,8 +87,13 @@ def update_monthly(log):
     cpi.to_csv(RAW / "nbu_cpi.csv")
     key = fetch.nbu_key_rate()
     key.to_csv(RAW / "nbu_key_rate.csv", header=["key_rate"])
-    eur = fetch.nbu_fx("EUR", "2024-01-01", pd.Period(CUTOFF_MONTH, "M").end_time.date())
+    # daily rate up to tomorrow (the NBU sets the next business day's rate the afternoon before — the same end date as
+    # qpm.overview.build uses for the slides): the model takes only full months, the FX nowcast
+    # (qpm.nowcast.fx_nowcast) the rest
+    from datetime import timedelta
+    eur = fetch.nbu_fx("EUR", "2024-01-01", date.today() + timedelta(days=1))
     eur.to_csv(RAW / "nbu_eur.csv", header=["uah_eur"])
+    eur = eur.loc[:pd.Period(CUTOFF_MONTH, "M").end_time]
 
     key_eom = key.resample("ME").last()
     key_eom.index = key_eom.index.to_period("M")
@@ -98,6 +125,12 @@ def update_monthly(log):
     chk = pd.DataFrame({"core m/m (файл НБУ)": read_core_cpi(), "core m/m (API)": cpi["core_mom"]}).dropna()
     log.append(f"Базовий ІСЦ: файл НБУ CCPI_m.xlsx (з {core.index.min()}) + API; розбіжність на перекритті "
                f"{(chk.iloc[:, 0] - chk.iloc[:, 1]).abs().max():.2f} в. п.\n")
+    log.append("Виправлені знаки у файлі НБУ (CORE_CPI_FIXES): "
+               + "; ".join(f"{m}: {v:+.1f} ({why})" for m, (v, why) in CORE_CPI_FIXES.items()) + ".\n")
+    for year, official in ((2016, 5.8), (2019, 3.9)):
+        chain = ((1 + core.loc[f"{year}-01":f"{year}-12"] / 100).prod() - 1) * 100
+        log.append(f"Перевірка: базова інфляція грудень/грудень {year} з місячних даних = {chain:.1f}% "
+                   f"(Держстат: {official}%).\n")
     dm.loc[new, "IR_POLICY_m"] = key_eom.reindex(new).values
     dm.loc[new, "ER_m"] = eur_avg.reindex(new).round(4).values
     log.append("## Додані місяці\n")
@@ -119,7 +152,10 @@ def read_core_cpi() -> pd.Series:
     for d, v in zip(dates[1:], mom[1:]):
         if d is not None and v not in (None, "…"):
             s[pd.Period(d, "M")] = round(float(v), 2)
-    return pd.Series(s).sort_index()
+    s = pd.Series(s).sort_index()
+    for m, (v, _) in CORE_CPI_FIXES.items():   # documented sign corrections, see CORE_CPI_FIXES
+        s[pd.Period(m, "M")] = v
+    return s
 
 
 def update_quarterly(log):
@@ -228,15 +264,24 @@ def update_foreign(log):
 
 
 def update_oil(dx, com, log):
-    """Brent in USD and EUR per barrel (quarterly averages) + futures-curve assumptions on the horizon."""
+    """Brent in USD and EUR per barrel (quarterly averages) + futures-curve assumptions on the horizon.
+
+    History = EIA spot only (monthly averages; the current month month-to-date). Horizon = NYMEX BZ contract for the
+    last month of each quarter (interpolated where a contract is missing); in the first horizon quarter the months
+    already observed enter at their actual (month-to-date) spot and only the remaining months at the futures price.
+    USD/EUR on the horizon = the latest month (month-to-date) held flat."""
     brent = fetch.brent_monthly("1999-01")
-    brent.to_csv(RAW / "brent_monthly.csv", header=["brent_usd"])
+    mtd = {pd.Period(k, "M"): v for k, v in brent.attrs.get("mtd", {}).items()}
+    raw = brent.to_frame("brent_usd")
+    raw["source"] = ["EIA spot, month-to-date to " + mtd[p] if p in mtd else "EIA spot (monthly average)" for p in raw.index]
+    raw.to_csv(RAW / "brent_monthly.csv")
     usd = fetch.ecb_usd_per_eur("1999-01")
     usd.to_csv(RAW / "ecb_usd_per_eur.csv", header=["usd_per_eur"])
     last_full_q = pd.Period(CUTOFF_MONTH, "M").asfreq("Q")
     if pd.Period(CUTOFF_MONTH, "M").month % 3 != 0:
         last_full_q -= 1
-    bq = brent.groupby(brent.index.asfreq("Q")).mean().loc[:last_full_q]
+    full = brent[[p not in mtd for p in brent.index]]
+    bq = full.groupby(full.index.asfreq("Q")).mean().loc[:last_full_q]
     uq = usd.groupby(usd.index.asfreq("Q")).mean().loc[:last_full_q]
     horizon = [q for q in dx.index if q > last_full_q]
     fut = fetch.brent_futures([str(q.asfreq("M", "end")) for q in horizon])
@@ -248,15 +293,34 @@ def update_oil(dx, com, log):
     if len(known) == 0:
         raise RuntimeError("Не вдалося отримати ф'ючерсну криву Brent")
     path = path.interpolate(limit_direction="both")
+    first = horizon[0]
+    # every month of the first horizon quarter that already has a spot price — complete months and the month-to-date
+    # one alike (they are all beyond last_full_q, so none of them is in bq): e.g. October actual + November/December
+    # at the futures price; once October and November are complete, December alone comes from the futures
+    observed = brent[brent.index.asfreq("Q") == first]
+    blend_note = ""
+    if len(observed):
+        path[first] = (observed.sum() + (3 - len(observed)) * path[first]) / 3
+        blend_note = (" У " + str(first) + ": " + ", ".join(f"{p} ${v:.1f} (спот{', до ' + mtd[p] if p in mtd else ''})"
+                                                            for p, v in observed.items())
+                      + f", решта місяців — ф'ючерс ${fut.get(first, np.nan):.1f} → середнє ${path[first]:.1f}.")
     dx["BRENT_USD"] = pd.concat([bq.reindex(dx.index[dx.index <= last_full_q]), path]).reindex(dx.index).round(2)
-    usd_path = pd.Series([OIL_ASSUMPTIONS["usd_per_eur"].get(q.year, np.nan) for q in horizon], index=horizon)
+    # USD/EUR: latest month-to-date ECB reference rate, held flat (random walk)
+    usd_daily = fetch.ecb_usd_per_eur_daily(str((usd.index.max() + 1).start_time.date()))
+    usd_latest = float(usd_daily.mean()) if len(usd_daily) else float(usd.iloc[-1])
+    usd_latest_note = (f"середнє {usd_daily.index.min().date()}–{usd_daily.index.max().date()}" if len(usd_daily)
+                       else f"останній місяць {usd.index.max()}")
+    usd_path = pd.Series(usd_latest, index=horizon)
     dx["USD_EUR"] = pd.concat([uq.reindex(dx.index[dx.index <= last_full_q]), usd_path]).reindex(dx.index).round(4)
     dx["OIL_EA"] = (dx["BRENT_USD"] / dx["USD_EUR"]).round(3)
     com.update({"BRENT_USD": "Brent, USD per barrel, period average", "USD_EUR": "USD per EUR, period average",
                 "OIL_EA": "Brent, EUR per barrel, period average"})
-    log.append("## Нафта Brent\n")
-    log.append(f"Факт до {last_full_q} (EIA spot до {brent.attrs.get('eia_last')}, далі ф'ючерси найближчого місяця); "
-               f"далі — ф'ючерсна крива; USD/EUR — ЄЦБ, далі припущення НБУ. {OIL_ASSUMPTIONS['source']}.\n")
+    log.append("## Нафта Brent і USD/EUR\n")
+    log.append(f"Факт до {last_full_q}: спот EIA, місячні середні (останній повний місяць — {brent.attrs.get('spot_last')}; "
+               f"поточний місяць — середнє до дати: {', '.join(f'{k} до {v}' for k, v in brent.attrs.get('mtd', {}).items()) or '—'}). "
+               f"Далі — ф'ючерсна крива NYMEX BZ на дату оновлення.{blend_note} "
+               f"USD/EUR — ЄЦБ; на горизонті — {usd_latest:.4f} ({usd_latest_note}) без змін; для порівняння припущення НБУ "
+               f"(липень 2026): {OIL_ASSUMPTIONS['usd_per_eur_nbu']}. {OIL_ASSUMPTIONS['source']}.\n")
     log.append(dx[["BRENT_USD", "USD_EUR", "OIL_EA"]].loc["2025Q1":"2028Q4"].to_markdown() + "\n")
 
 

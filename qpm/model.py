@@ -105,7 +105,13 @@ def _linearize(eq: str, params: dict[str, float]):
 
 # --------------------------------------------------------------------------- gensys
 def gensys(g0, g1, c, psi, pi, div=1.0 + 1e-8, realsmall=1e-6):
-    """Port of Sims' gensys.m. Returns dict with G1, C, impact, fmat, fwt, ywt, eu."""
+    """Port of Sims' gensys.m (the same algorithm IRIS uses for linear rational-expectations models).
+
+    Steps: QZ-decompose (g0, g1) and order the generalized eigenvalues so the unstable ones (|root| > div) come
+    last; the number of unstable roots must equal the number of expectation errors that can be solved out
+    (Blanchard–Kahn: `exists` if enough, `unique` if not too many); then build the stable solution
+    s_t = T s_{t-1} + C + impact e_t, plus (fmat, fwt, ywt) that give the effect of shocks anticipated j periods
+    ahead: ywt fmat^(j-1) fwt (used by Model.R)."""
     n = g0.shape[0]
 
     def stable(alpha, beta):
@@ -222,6 +228,13 @@ class Model:
 
     # -- build canonical form and solve
     def solve(self):
+        """Build the Sims form G0 s_t = G1 s_{t-1} + c + Psi e_t + Pi eta_t from the parsed linear equations and
+        solve it with gensys.
+
+        The state vector holds every transition variable at t, auxiliary lags (x_{t-1}, x_{t-2}, ... as extra states
+        when an equation uses deeper lags) and auxiliary leads (E_t x_{t+1}, E_t x_{t+2}, ... when an equation uses
+        leads); each lead adds an expectation error eta (the Pi column) whose elimination is what the Blanchard–Kahn
+        counting of unstable roots achieves inside gensys."""
         tv = {v: i for i, v in enumerate(self.tvars)}
         sh = {s: i for i, s in enumerate(self.shocks)}
         maxlag = {v: 0 for v in self.tvars}
@@ -254,6 +267,8 @@ class Model:
                 return si[name], -1
             return si[f"{name}__L{-k - 1}"], -1
 
+        # each parsed equation is "sum a_i * term_i + const = 0": terms dated t (or leads) go to G0, terms dated t-1
+        # (or deeper lags) to G1 with the opposite sign, shocks to Psi, the constant to c
         row = 0
         for coefs, const in self.teqs:
             for (name, k), a in coefs.items():
@@ -289,9 +304,10 @@ class Model:
         if not all(sol["eu"]):
             raise RuntimeError(f"Blanchard-Kahn conditions fail (existence, uniqueness) = {sol['eu']}")
         self.states, self.si, self.sol = states, si, sol
+        # reduced form: s_t = T s_{t-1} + C + R0 e_t (+ effects of anticipated future shocks, see R(j))
         self.T, self.C, self.R0 = sol["T"], sol["C"], sol["impact"]
         self.n_states = N
-        # measurement: Y = Z s + d
+        # measurement: Y = Z s + d — each !measurement_equations line "OBS = expr" is solved for OBS
         mv = {v: i for i, v in enumerate(self.mvars)}
         self.Zm = np.zeros((len(self.mvars), N)); self.dm = np.zeros(len(self.mvars))
         for coefs, const in self.meqs:

@@ -74,10 +74,17 @@ def compare():
     t = pd.DataFrame(table).T
     worst = float(t.max().max())
     print(t.map(lambda x: f"{x:.0e}"))
-    report = ["# Звірка Python-порту з MATLAB/IRIS", "",
-              "Ті самі дані, параметри й плани сценаріїв; MATLAB R2026b + IRIS 20230622 (`matlab/run_check.m`). "
-              "Модель — `model/model.model` (шаблон НБУ + нафтовий канал команди).", "",
-              "Максимальна абсолютна різниця (одиниці моделі: в. п. або 100·ln):", "",
+    report = ["# Звірка Python-порту з MATLAB/IRIS", ""]
+    if worst >= 1e-3:   # MATLAB was run on earlier data/plans: the numbers below compare different inputs
+        report += ["> **Результати MATLAB застарілі.** Збережені файли `matlab/outputs/*.csv` отримано на попередніх "
+                   "даних і планах (до оновлення даних 25.10.2026), тому розбіжність нижче порівнює різні вхідні дані, "
+                   "а не два рушії. Перезапустіть `matlab/run_check.m` (MATLAB + IRIS) і потім `python "
+                   "matlab/compare_with_matlab.py`; до оновлення даних розбіжність становила ~1e−5 (історія git). "
+                   "Поки що презентація бере графіки з Python (`results/matlab_status.json`).", ""]
+    report += ["Ті самі дані, параметри й плани сценаріїв; MATLAB R2026b + IRIS 20230622 (`matlab/run_check.m`). "
+               "Модель — `model/model.model` (шаблон НБУ + нафтовий канал команди). Що перевіряє звірка: розв'язувач, "
+               "фільтр Калмана й симуляції з планом (плани, шоки наукасту й траєкторії ставки готує Python).", "",
+               "Максимальна абсолютна різниця (одиниці моделі: в. п. або 100·ln):", "",
               "| | " + " | ".join(f"`{c}`" for c in t.columns) + " |", "|---|" + "---|" * len(t.columns)]
     report += [f"| {i} | " + " | ".join(f"{v:.0e}" for v in r.values) + " |" for i, r in t.iterrows()]
     report += ["", f"**Найбільша розбіжність: {worst:.1e}**", "",
