@@ -73,6 +73,46 @@ pres.defineSlideMaster({
   ],
 });
 
+// ------------------------------------------------------------------ text fitting
+// pptxgenjs does not measure text, and PowerPoint/LibreOffice do not shrink an overfull box when the file is opened,
+// so every box is sized here from an estimate of its wrapped height. Widths are average advances per character in em,
+// measured on the exported PDF (26.10.2026): body Calibri/Carlito 0.48 median (the greedy wrap estimate already
+// overcounts lines, so the median is used; checked with a collision test on the PDF); headings in Cambria
+// render in LibreOffice with DejaVu Serif for Cyrillic (Caladea has no Cyrillic), 0.68 median -> 0.66 for the greedy
+// estimate (it overcounts wraps; checked on the rendered titles: all two-line titles fit at 26 pt). Line pitch 1.2 of the font size, as measured.
+const EM_BODY = 0.48, EM_HEAD = 0.66, LINE = 1.2;
+const OVERFLOW = [];
+function wrapLines(text, size, widthIn, em = EM_BODY) {
+  const cpl = Math.max(4, Math.floor(widthIn / (size / 72 * em)));
+  let lines = 0;
+  for (const para of String(text).split("\n")) {
+    let cur = 0; lines += 1;
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      const L = word.length;
+      if (cur === 0) cur = L; else if (cur + 1 + L <= cpl) cur += 1 + L; else { lines += 1; cur = L; }
+      while (cur > cpl) { lines += 1; cur -= cpl; }
+    }
+  }
+  return lines;
+}
+// height (in) of a list of paragraphs: indent = bullet indent (in), paraAfter = space after a paragraph (pt)
+function textHeight(items, size, widthIn, { indent = 0, paraAfter = 0, em = EM_BODY } = {}) {
+  const arr = Array.isArray(items) ? items : [items];
+  const lines = arr.reduce((a, t) => a + wrapLines(plain(t), size, widthIn - indent, em), 0);
+  return lines * size * LINE / 72 + Math.max(arr.length - 1, 0) * paraAfter / 72;
+}
+// largest font size (step 0.5 pt) between `min` and `size` at which the text fits; records a warning if none does
+function fitSize(items, widthIn, heightIn, size, min, opts = {}, where = "") {
+  let s = size;
+  while (s > min && textHeight(items, s, widthIn, opts) > heightIn) s -= 0.5;
+  if (process.env.DECK_DEBUG && s < size) console.log(`  [${s} з ${size}] ${where}`);
+  if (textHeight(items, s, widthIn, opts) > heightIn + 0.01) OVERFLOW.push(`${where}: потрібно ${textHeight(items, s,
+    widthIn, opts).toFixed(2)} in, є ${heightIn.toFixed(2)} in`);
+  return s;
+}
+const BULLET = { indent: 14 / 72, paraAfter: 8 };
+let CURRENT = "";   // title of the slide being built, for warnings
+
 // ------------------------------------------------------------------ helpers
 function image(slide, im, x, y, maxW, maxH, name) {
   const ar = im.w / im.h;
@@ -81,21 +121,25 @@ function image(slide, im, x, y, maxW, maxH, name) {
   slide.addImage({ path: im.path, x, y, w, h, objectName: name || "chart" });
   return { x, y, w, h };
 }
-function bulletsBox(slide, items, x, y, w, h, size = 14) {
-  if (!items || !items.length) return;
+function bulletsBox(slide, items, x, y, w, h, size = 14, min = 11) {
+  if (!items || !items.length) return size;
+  const fs_ = fitSize(items, w, h, size, min, BULLET, `${CURRENT} — пункти`);
   slide.addText(items.map((t, i) => ({ text: t, options: { bullet: { indent: 14 }, breakLine: i < items.length - 1,
-    paraSpaceAfter: 8 } })), { x, y, w, h, fontSize: size, color: C.text1, valign: "top", margin: 0, isTextBox: true,
+    paraSpaceAfter: 8 } })), { x, y, w, h, fontSize: fs_, color: C.text1, valign: "top", margin: 0, isTextBox: true,
     objectName: "bullets" });
+  return fs_;
 }
 function numberedRow(slide, items, x, y, w, h) {
   const n = items.length, gap = 0.3, cw = (w - gap * (n - 1)) / n;
+  // one size for the whole row, so the points look alike
+  const fs_ = Math.min(...items.map((t, i) => fitSize(t, cw - 0.45, h, 13, 10.5, {}, `${CURRENT} — пункт ${i + 1}`)));
   items.forEach((t, i) => {
     const cx = x + i * (cw + gap);
     slide.addShape(pres.shapes.OVAL, { x: cx, y: y + 0.02, w: 0.34, h: 0.34, fill: { color: HEX.gold }, line: { type: "none" },
       objectName: `num${i + 1}` });
     slide.addText(String(i + 1), { x: cx, y: y + 0.02, w: 0.34, h: 0.34, fontSize: 12, bold: true, color: C.background1,
       align: "center", valign: "middle", margin: 0, isTextBox: true });
-    slide.addText(t, { x: cx + 0.45, y, w: cw - 0.45, h, fontSize: 13, color: C.text1, valign: "top", margin: 0,
+    slide.addText(t, { x: cx + 0.45, y, w: cw - 0.45, h, fontSize: fs_, color: C.text1, valign: "top", margin: 0,
       isTextBox: true, objectName: `point${i + 1}` });
   });
 }
@@ -113,7 +157,10 @@ function sourcesLine(slide, sources) {
   if (!sources || !sources.length) return;
   const items = [{ text: "Джерела: " }];
   sources.forEach((s, i) => { if (i) items.push({ text: " · " }); items.push(s); });
-  slide.addText(runs(items), { x: 5.4, y: H - 0.44, w: W - M - 0.75 - 5.4, h: 0.32, fontSize: 9, color: HEX.muted,
+  // one line between the breadcrumb and the slide number: shrink rather than wrap onto the slide body
+  const sw = W - M - 0.75 - 5.4;
+  const fs_ = fitSize(plain(items), sw, 9 * LINE / 72 + 0.005, 9, 7, {}, `${CURRENT} — джерела`);
+  slide.addText(runs(items), { x: 5.4, y: H - 0.44, w: sw, h: 0.32, fontSize: fs_, color: HEX.muted,
     valign: "middle", margin: 0, isTextBox: true, objectName: "sources" });
 }
 function table(slide, t, x, y, w, opts = {}) {
@@ -134,11 +181,35 @@ function table(slide, t, x, y, w, opts = {}) {
   const extra = rh ? { rowH: rh } : {};
   slide.addTable([header, ...rows], { x, y, w, colW, border: { type: "solid", pt: 0.5, color: HEX.grid },
     margin: [3, 5, 3, 5], autoPage: false, objectName: "table", ...extra });
+  return tableHeight(t, colW, fs_, rh || 0);
+}
+// estimated table height (in): each row is as tall as its tallest wrapped cell (cell margins 3 + 3 pt, 5 + 5 pt)
+function tableHeight(t, colW, fs_, rowH) {
+  const rowOf = (r, bold) => Math.max(rowH, ...r.map((c, ci) =>
+    wrapLines(plain(c), fs_, colW[ci] - 10 / 72, bold ? EM_BODY * 1.06 : EM_BODY) * fs_ * LINE / 72 + 6 / 72));
+  return rowOf(t.header, true) + t.rows.reduce((a, r) => a + rowOf(r, false), 0);
+}
+function colWidths(t, w, opts = {}) {
+  if (t.colw) return t.colw;
+  const first = opts.firstCol || Math.min(3.2, w * 0.32);
+  const rest = (w - first) / (t.header.length - 1);
+  return [first, ...Array(t.header.length - 1).fill(rest)];
+}
+// largest table font (from `size` down to `min`) at which the table fits into `maxH`
+function fitTable(t, w, maxH, size, min, opts = {}) {
+  const colW = colWidths(t, w, opts);
+  let s = size;
+  while (s > min && tableHeight(t, colW, s, opts.rowH || t.rowH || 0) > maxH) s -= 0.5;
+  if (tableHeight(t, colW, s, opts.rowH || t.rowH || 0) > maxH + 0.02) OVERFLOW.push(`${CURRENT} — таблиця`);
+  return s;
 }
 function newSlide(s) {
+  CURRENT = s.title;
   const master = s.section ? "CONTENT_" + s.section : "CONTENT_intro";
   const slide = pres.addSlide({ masterName: master, sectionTitle: s.section || "Вступ" });
-  slide.addText(s.title, { placeholder: "title" });
+  // the title box holds two lines at 26 pt; a longer title is shrunk instead of running into the slide body
+  const tfs = fitSize(s.title, W - 2 * M, 1.0, 26, 20, { em: EM_HEAD }, `${s.title} — заголовок`);
+  slide.addText(s.title, { placeholder: "title", fontSize: tfs });
   if (s.notes) slide.addNotes(s.notes);
   sourcesLine(slide, s.sources);
   return slide;
@@ -166,7 +237,9 @@ const R = {
   },
   summary(s) {
     const slide = newSlide(s);
-    const n = s.cards.length, gap = 0.3, cw = (W - 2 * M - gap * (n - 1)) / n, ch = 2.35;
+    const n = s.cards.length, gap = 0.3, cw = (W - 2 * M - gap * (n - 1)) / n, ch = 2.3;
+    // one text size for all cards: the longest card text decides
+    const cfs = Math.min(...s.cards.map((c) => fitSize(c.text, cw - 0.5, ch - 1.4, 13, 10.5, {}, `${CURRENT} — картка`)));
     s.cards.forEach((c, i) => {
       const x = M + i * (cw + gap), y = TOP;
       slide.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w: cw, h: ch, rectRadius: 0.08, fill: { color: HEX.tint },
@@ -176,12 +249,14 @@ const R = {
       slide.addText([{ text: c.value, options: { fontSize: 40, bold: true, color: C.accent1, fontFace: THEME.headFontFace } },
         { text: "  " + c.delta, options: { fontSize: 15, bold: true, color: HEX.gold } }],
         { x: x + 0.25, y: y + 0.5, w: cw - 0.5, h: 0.8, valign: "middle", margin: 0, isTextBox: true });
-      slide.addText(c.text, { x: x + 0.25, y: y + 1.35, w: cw - 0.5, h: 0.9, fontSize: 13, color: C.text1, valign: "top",
-        margin: 0, isTextBox: true });
+      slide.addText(c.text, { x: x + 0.25, y: y + 1.32, w: cw - 0.5, h: ch - 1.4, fontSize: cfs, color: C.text1,
+        valign: "top", margin: 0, isTextBox: true });
     });
-    const ty = TOP + ch + 0.35;
-    table(slide, s.table, M, ty, W - 2 * M, { firstCol: 3.6, font: 15, rowH: 0.42 });
-    slide.addText(s.footnote, { x: M, y: ty + 0.42 * (s.table.rows.length + 1) + 0.2, w: W - 2 * M, h: 0.55, fontSize: 11,
+    const ty = TOP + ch + 0.25;
+    const th = table(slide, s.table, M, ty, W - 2 * M, { firstCol: 3.6, font: 14, rowH: 0.38 });
+    const fy = ty + th + 0.12, fh = BOTTOM - fy;
+    const ffs = fitSize(s.footnote, W - 2 * M, fh, 11, 9, { em: EM_BODY * 1.04 }, `${CURRENT} — виноска`);
+    slide.addText(s.footnote, { x: M, y: fy, w: W - 2 * M, h: fh, fontSize: ffs,
       color: C.accent6, valign: "top", margin: 0, isTextBox: true, italic: true });
   },
   chart(s) {
@@ -215,24 +290,31 @@ const R = {
   chart_table(s) {
     const slide = newSlide(s);
     if (s.layout === "stack") {
-      const avail = W - 2 * M, ar = s.image.w / s.image.h, ih = Math.min(2.85, avail / ar);
+      // chart on top, table bottom-left, bullets bottom-right: the chart gets what the lower row leaves
+      const avail = W - 2 * M, ar = s.image.w / s.image.h, tw = 7.3, bw = avail - tw - 0.35;
+      const tOpts = { firstCol: 2.6, rowH: 0.32 };
+      const tH = tableHeight(s.table, colWidths(s.table, tw, tOpts), 12, 0.32);
+      const need = Math.max(tH, textHeight(s.bullets, 12.5, bw, BULLET));
+      const ih = Math.max(2.1, Math.min(2.85, avail / ar, BOTTOM - TOP - 0.2 - need));
       const iw = ih * ar;
       image(slide, s.image, M + (avail - iw) / 2, TOP - 0.05, iw, ih, "chart");
-      const y = TOP + ih + 0.15, tw = 7.7;
-      table(slide, s.table, M, y, tw, { firstCol: 2.9, font: 12, rowH: 0.34 });
-      bulletsBox(slide, s.bullets, M + tw + 0.35, y + 0.05, avail - tw - 0.35, BOTTOM - y - 0.05, 13);
+      const y = TOP + ih + 0.15;
+      const tfs = fitTable(s.table, tw, BOTTOM - y, 12, 10, tOpts);
+      table(slide, s.table, M, y, tw, { ...tOpts, font: tfs });
+      bulletsBox(slide, s.bullets, M + tw + 0.35, y + 0.02, bw, BOTTOM - y - 0.02, 13, 10.5);
       return;
     }
     const leftW = 6.9, maxH = BOTTOM - TOP;
     image(slide, s.image, M, TOP, leftW, maxH, "chart");
     const x = M + leftW + 0.35, w = W - M - x;
-    table(slide, s.table, x, TOP, w, { firstCol: w * 0.3, font: 12, rowH: 0.36 });
-    const rowsH = 0.36 * (s.table.rows.length + 1) + 0.25;
-    bulletsBox(slide, s.bullets, x, TOP + rowsH + 0.2, w, BOTTOM - TOP - rowsH - 0.2, 13);
+    const rowsH = table(slide, s.table, x, TOP, w, { firstCol: w * 0.3, font: 12, rowH: 0.36 });
+    bulletsBox(slide, s.bullets, x, TOP + rowsH + 0.3, w, BOTTOM - TOP - rowsH - 0.3, 13);
   },
   table(s) {
     const slide = newSlide(s);
-    table(slide, s.table, M, TOP, W - 2 * M, { font: s.table.font || 12, leftAll: true });
+    const opts = { leftAll: true, rowH: s.table.rowH };
+    const fs_ = fitTable(s.table, W - 2 * M, BOTTOM - TOP, s.table.font || 12, 9, opts);
+    table(slide, s.table, M, TOP, W - 2 * M, { ...opts, font: fs_ });
   },
   process(s) {
     const slide = newSlide(s);
@@ -241,9 +323,11 @@ const R = {
       const x = M + i * (bw + gap);
       slide.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w: bw, h: bh, rectRadius: 0.08, fill: { color: HEX.tint },
         line: { type: "none" }, objectName: `step${i + 1}` });
-      slide.addText(`${i + 1}. ${st.head}`, { x: x + 0.2, y: y + 0.18, w: bw - 0.4, h: 0.45, fontSize: 17, bold: true,
+      slide.addText(`${i + 1}. ${st.head}`, { x: x + 0.2, y: y + 0.12, w: bw - 0.4, h: 0.55, bold: true,
+        fontSize: fitSize(`${i + 1}. ${st.head}`, bw - 0.4, 0.55, 17, 13, { em: EM_HEAD }, `${CURRENT} — крок`),
         color: C.accent1, margin: 0, isTextBox: true, fontFace: THEME.headFontFace });
-      slide.addText(st.text, { x: x + 0.2, y: y + 0.7, w: bw - 0.4, h: bh - 0.85, fontSize: 13, color: C.text1,
+      slide.addText(st.text, { x: x + 0.2, y: y + 0.7, w: bw - 0.4, h: bh - 0.85, color: C.text1,
+        fontSize: fitSize(st.text, bw - 0.4, bh - 0.85, 13, 10.5, {}, `${CURRENT} — крок ${i + 1}`),
         valign: "top", margin: 0, isTextBox: true });
       if (i < n - 1) slide.addShape(pres.shapes.RIGHT_ARROW, { x: x + bw + 0.08, y: y + bh / 2 - 0.15, w: gap - 0.16, h: 0.3,
         fill: { color: HEX.gold }, line: { type: "none" }, objectName: `arrow${i + 1}` });
@@ -253,8 +337,8 @@ const R = {
       const x = M + i * (sw + 0.3);
       slide.addText(st.value, { x, y: sy, w: sw, h: 0.85, fontSize: 34, bold: true, color: HEX.gold, margin: 0,
         isTextBox: true, fontFace: THEME.headFontFace });
-      slide.addText(st.label, { x, y: sy + 0.9, w: sw, h: 0.7, fontSize: 14, color: C.text1, valign: "top", margin: 0,
-        isTextBox: true });
+      slide.addText(st.label, { x, y: sy + 0.9, w: sw, h: 0.7, color: C.text1, valign: "top", margin: 0,
+        fontSize: fitSize(st.label, sw, 0.7, 14, 10.5, {}, `${CURRENT} — показник`), isTextBox: true });
     });
     if (s.chips) {
       slide.addText("Що ми додали до шаблону НБУ", { x: M, y: BOTTOM - 1.45, w: 6, h: 0.32, fontSize: 13, bold: true,
@@ -285,9 +369,11 @@ const R = {
           fill: { color: shades[sev[r] + imp[c]] }, line: { type: "none" }, objectName: `cell ${r}/${c}` });
         const cell = s.cells.find((q) => q.row === r && q.col === c);
         if (cell) {
+          const txt = cell.items.map((it) => "▲ " + it.text);
+          const mfs = fitSize(txt, cw - 0.36, rh - 0.24, 13, 10, { paraAfter: 4, em: EM_BODY * 1.06 }, `${CURRENT} — клітинка`);
           slide.addText(cell.items.map((it, k) => ({ text: (it.dir === "↑" ? "▲ " : "▼ ") + it.text, options: {
             color: it.dir === "↑" ? HEX.up : HEX.down, breakLine: k < cell.items.length - 1, paraSpaceAfter: 4 } })),
-            { x: x + 0.18, y: y + 0.12, w: cw - 0.36, h: rh - 0.24, fontSize: 13, valign: "middle", margin: 0,
+            { x: x + 0.18, y: y + 0.12, w: cw - 0.36, h: rh - 0.24, fontSize: mfs, valign: "middle", margin: 0,
               isTextBox: true, bold: true });
         }
       });
@@ -309,15 +395,26 @@ const R = {
     slide.addText(s.big_label, { x: M + 0.3, y: TOP + 2.35, w: bw - 0.6, h: 0.8, fontSize: 16, color: C.background1,
       margin: 0, isTextBox: true });
     const x = M + bw + 0.4, w = W - M - x;
+    // each group gets a heading (0.4 in) and exactly the height its bullets need; one font size for all groups,
+    // the largest at which the stack fits; leftover space is spread between the groups
+    const HEAD = 0.38, GAP = 0.12, RB = { indent: BULLET.indent, paraAfter: 5 };   // tighter than other slides: 10 items
+    const need = (fs_) => s.groups.map((g) => HEAD + textHeight(g.items, fs_, w, RB));
+    let fs_ = 14;
+    const room = bh - GAP * (s.groups.length - 1);
+    while (fs_ > 11 && need(fs_).reduce((a, b) => a + b, 0) > room) fs_ -= 0.5;
+    const hs = need(fs_), total = hs.reduce((a, b) => a + b, 0);
+    if (process.env.DECK_DEBUG) console.log(`  [reco ${fs_}] ${CURRENT}: ${hs.map((v) => v.toFixed(2)).join(" / ")} з ${room.toFixed(2)}`);
+    if (total > room + 0.01) OVERFLOW.push(`${CURRENT} — групи: потрібно ${total.toFixed(2)} in, є ${room.toFixed(2)} in`);
+    const spare = Math.max(0, room - total) / s.groups.length;
     let y = TOP;
-    const lines = s.groups.map((g) => g.items.reduce((a, t) => a + Math.ceil(t.length / 105), 0));
-    const unit = (bh - 0.55 * s.groups.length) / lines.reduce((a, b) => a + b, 0);
     s.groups.forEach((g, i) => {
-      const gh = 0.5 + lines[i] * unit;
-      slide.addText(g.head, { x, y, w, h: 0.38, fontSize: 16, bold: true, color: C.accent1, margin: 0, isTextBox: true,
+      slide.addText(g.head, { x, y, w, h: 0.36, fontSize: 16, bold: true, color: C.accent1, margin: 0, isTextBox: true,
         fontFace: THEME.headFontFace });
-      bulletsBox(slide, g.items, x, y + 0.42, w, gh - 0.42, 14);
-      y += gh + 0.05;
+      const gh = hs[i] - HEAD + spare;
+      slide.addText(g.items.map((t, k) => ({ text: t, options: { bullet: { indent: 14 }, breakLine: k < g.items.length - 1,
+        paraSpaceAfter: 5 } })), { x, y: y + HEAD, w, h: gh, fontSize: fs_, color: C.text1, valign: "top", margin: 0,
+        isTextBox: true, objectName: "bullets" });
+      y += HEAD + gh + GAP;
     });
   },
   bullets2(s) {
@@ -336,12 +433,14 @@ const R = {
         line: { type: "none" }, objectName: `badge${i + 1}` });
       slide.addText(String(i + 1), { x: x + 0.25, y: TOP + 0.25, w: 0.5, h: 0.5, fontSize: 18, bold: true,
         color: C.background1, align: "center", valign: "middle", margin: 0, isTextBox: true });
-      slide.addText(g.head, { x: x + 0.9, y: TOP + 0.25, w: cw - 1.1, h: 0.5, fontSize: 17, bold: true, color: C.accent1,
+      slide.addText(g.head, { x: x + 0.9, y: TOP + 0.25, w: cw - 1.1, h: 0.5, bold: true, color: C.accent1,
+        fontSize: fitSize(g.head, cw - 1.1, 0.5, 17, 13, { em: EM_HEAD }, `${CURRENT} — заголовок картки`),
         valign: "middle", margin: 0, isTextBox: true, fontFace: THEME.headFontFace });
       bulletsBox(slide, g.items, x + 0.3, TOP + 1.0, cw - 0.55, ch - 1.2, 14);
     });
   },
   summary_end(s) {
+    CURRENT = s.title;
     const slide = pres.addSlide({ masterName: "DARK", sectionTitle: s.section });
     slide.addText(s.title, { x: 0.8, y: 0.7, w: 11.7, h: 0.9, fontSize: 36, bold: true, color: C.background1,
       fontFace: THEME.headFontFace, margin: 0, isTextBox: true });
@@ -351,7 +450,8 @@ const R = {
         objectName: `n${i + 1}` });
       slide.addText(String(i + 1), { x: 0.8, y, w: 0.62, h: 0.62, fontSize: 20, bold: true, color: HEX.teal,
         align: "center", valign: "middle", margin: 0, isTextBox: true });
-      slide.addText(t, { x: 1.7, y: y - 0.08, w: 10.8, h: 0.8, fontSize: 20, color: C.background1, valign: "middle",
+      slide.addText(t, { x: 1.7, y: y - 0.08, w: 10.8, h: 0.8, color: C.background1, valign: "middle",
+        fontSize: fitSize(t, 10.8, 0.8, 20, 15, {}, `${CURRENT} — пункт ${i + 1}`),
         margin: 0, isTextBox: true });
     });
     if (s.notes) slide.addNotes(s.notes);
@@ -364,7 +464,8 @@ const R = {
         fill: { color: i % 2 ? "FFFFFF" : HEX.tint }, line: { color: HEX.grid, width: 0.5 }, objectName: `eq${i + 1}` });
       slide.addText(name, { x: M + 0.25, y, w: 3.3, h: 0.82, fontSize: 14, bold: true, color: C.accent1, valign: "middle",
         margin: 0, isTextBox: true });
-      slide.addText(eq, { x: M + 3.6, y, w: W - 2 * M - 3.8, h: 0.82, fontSize: 16, color: C.text1, valign: "middle",
+      slide.addText(eq, { x: M + 3.6, y, w: W - 2 * M - 3.8, h: 0.82, color: C.text1, valign: "middle",
+        fontSize: fitSize(eq, W - 2 * M - 3.8, 0.8, 16, 12, { em: 0.45 }, `${CURRENT} — рівняння ${i + 1}`),
         margin: 0, isTextBox: true, fontFace: "Cambria Math" });
       y += 0.95;
     });
@@ -379,6 +480,11 @@ for (const s of DATA.slides) {
   if (!added.has(sec)) { pres.addSection({ title: sec }); added.add(sec); }
   if (!R[s.type]) throw new Error("Unknown slide type: " + s.type);
   R[s.type](s);
+}
+if (OVERFLOW.length) {
+  console.warn("Текст не вміщається навіть на мінімальному кеглі (скоротіть у deck/content.py):");
+  OVERFLOW.forEach((o) => console.warn("  - " + o));
+  if (process.env.DECK_STRICT) process.exit(1);
 }
 fs.mkdirSync(OUT_DIR, { recursive: true });
 pres.writeFile({ fileName: OUT }).then(async (f) => {

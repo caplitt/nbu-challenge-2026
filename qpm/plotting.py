@@ -105,13 +105,139 @@ def line_panel(ax, series: dict[str, pd.Series], title: str, first_fore: pd.Peri
     return ax
 
 
+def _data_points(ax, r):
+    """Display coordinates of everything plotted in data units on `ax` (lines densified, bar and marker boxes),
+    used to test whether a legend sits on top of the data. Reference lines in axes units (axhline, axvspan) and
+    shaded bands are ignored: a legend over them stays readable."""
+    from matplotlib.collections import PathCollection
+    from matplotlib.patches import Rectangle
+    pts, boxes = [], []
+    for ln in ax.lines:
+        if not ln.get_visible() or ln.get_transform() != ax.transData:
+            continue
+        xy = np.asarray(ln.get_xydata(), float)
+        xy = xy[np.isfinite(xy).all(axis=1)]
+        if len(xy) == 0:
+            continue
+        if len(xy) > 1:   # densify the segments so that a line crossing the legend is caught between its vertices
+            xy = np.vstack([np.linspace(a, b, 12) for a, b in zip(xy[:-1], xy[1:])])
+        pts.append(ax.transData.transform(xy))
+    for pa in ax.patches:
+        if isinstance(pa, Rectangle) and pa.get_transform() == ax.transData and pa.get_visible() and pa.get_height():
+            boxes.append(pa.get_window_extent(r))
+    for col in ax.collections:
+        if isinstance(col, PathCollection) and col.get_offset_transform() == ax.transData:
+            off = np.asarray(col.get_offsets(), float)
+            if len(off):
+                pts.append(ax.transData.transform(off))
+    return (np.vstack(pts) if pts else np.empty((0, 2))), boxes
+
+
+def _legend_hits(ax, leg, r):
+    bb = leg.get_window_extent(r).expanded(1.04, 1.08)
+    pts, boxes = _data_points(ax, r)
+    inside = ((pts[:, 0] >= bb.x0) & (pts[:, 0] <= bb.x1) & (pts[:, 1] >= bb.y0) & (pts[:, 1] <= bb.y1)).sum() if len(pts) else 0
+    return int(inside) + sum(bb.overlaps(b) for b in boxes)
+
+
+def tidy(fig):
+    """Collision guard run on every chart before saving (deck rule: nothing may sit on top of anything):
+    1) a panel title wider than its panel is wrapped, so it cannot run into the next panel;
+    2) tick labels that touch their neighbours are thinned (every 2nd, 3rd, ... label kept);
+    3) a legend lying on the data is moved to the free corner; if there is none and the panel is in the bottom row,
+       it goes under the panel."""
+    import textwrap
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    for ax in fig.axes:
+        # titles are left-aligned (rcParams), i.e. they live in ax._left_title, not in ax.title
+        for t in (ax._left_title, ax.title, ax._right_title):
+            if t.get_text():
+                aw, tw = ax.get_window_extent(r).width, t.get_window_extent(r).width
+                if tw > aw:
+                    chars = max(12, int(len(t.get_text()) * aw / tw * 0.95))
+                    t.set_text("\n".join(textwrap.wrap(t.get_text(), chars)))
+        # reference-line labels ('ціль 5%') placed on the data are moved to a free end of the line, above or below
+        for ann in [a for a in ax.texts if hasattr(a, "xyann") and isinstance(getattr(a, "xycoords", None), tuple)
+                    and "axes fraction" in a.xycoords]:
+            def hits(a=ann):
+                fig.canvas.draw()
+                bb = a.get_window_extent(r)
+                pts, _ = _data_points(ax, r)
+                return int(((pts[:, 0] >= bb.x0) & (pts[:, 0] <= bb.x1) & (pts[:, 1] >= bb.y0) &
+                            (pts[:, 1] <= bb.y1)).sum()) if len(pts) else 0
+            if hits() == 0:
+                continue
+            y0 = ann.xy[1]
+            options = [((1, y0), (0, 3), "right", "bottom"), ((1, y0), (0, -3), "right", "top"),
+                       ((0.01, y0), (0, -3), "left", "top"), ((0.01, y0), (0, 3), "left", "bottom")]
+            scored = []
+            for xy, off, ha, va in options:
+                ann.xy, ann.xyann = xy, off
+                ann.set_ha(ha); ann.set_va(va)
+                scored.append((hits(), xy, off, ha, va))
+                if scored[-1][0] == 0:
+                    break
+            _, xy, off, ha, va = min(scored, key=lambda z: z[0])
+            ann.xy, ann.xyann = xy, off
+            ann.set_ha(ha); ann.set_va(va)
+        for axis, setter in ((ax.xaxis, ax.set_xticks), (ax.yaxis, ax.set_yticks)):
+            lo, hi = sorted(axis.get_view_interval())
+            ticks = [(loc, lab) for loc, lab in zip(axis.get_ticklocs(), axis.get_ticklabels())
+                     if lo - 1e-9 <= loc <= hi + 1e-9 and lab.get_text()]
+            if len(ticks) < 3:
+                continue
+            ext = [lab.get_window_extent(r) for _, lab in ticks]
+            horiz = axis is ax.xaxis
+            def clash(step):
+                kept = ext[::step]
+                return any((a.x1 + 3 > b.x0) if horiz else (a.y1 + 1 > b.y0) for a, b in zip(kept[:-1], kept[1:]))
+            step = 1
+            while step < len(ticks) and clash(step):
+                step += 1
+            if step > 1:
+                keep = ticks[::step]
+                setter([loc for loc, _ in keep], [lab.get_text() for _, lab in keep])
+        leg = ax.get_legend()
+        if leg is None:
+            continue
+        fig.canvas.draw()
+        if _legend_hits(ax, leg, r) == 0:
+            continue
+        handles, labels = leg.legend_handles, [tx.get_text() for tx in leg.get_texts()]
+        fs = leg.get_texts()[0].get_fontsize() if leg.get_texts() else 9
+        best = None
+        for loc in ("upper left", "upper right", "lower left", "lower right", "center left", "center right",
+                    "upper center", "lower center"):
+            cand = ax.legend(handles, labels, loc=loc, fontsize=fs)
+            fig.canvas.draw()
+            hits = _legend_hits(ax, cand, r)
+            if best is None or hits < best[0]:
+                best = (hits, loc)
+            if hits == 0:
+                break
+        if best[0] > 0 and ax.get_subplotspec() is not None and ax.get_subplotspec().is_last_row():
+            fig.canvas.draw()
+            lab_bottom = min([tl.get_window_extent(r).y0 for tl in ax.get_xticklabels() if tl.get_text()] or
+                             [ax.get_window_extent(r).y0])
+            y = ax.transAxes.inverted().transform((0, lab_bottom))[1] - 0.04
+            ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, y), ncol=min(len(labels), 3),
+                      fontsize=min(fs, 8.5))
+        else:
+            ax.legend(handles, labels, loc=best[1], fontsize=fs)
+
+
 def save(fig, path, source: str | None = None):
-    """Save a figure; `source` adds a muted 'Джерело: ...' line under the chart (as in NBU reports)."""
+    """Save a figure; `source` adds a muted 'Джерело: ...' line under the chart (as in NBU reports). Runs `tidy`
+    first and puts the source line under the lowest element (a legend moved under a panel included)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    tidy(fig)
     if source:
-        fig.text(0.01, 0.005, f"Джерело: {source}", fontsize=8, color=INK["muted"], ha="left", va="bottom")
-        fig.subplots_adjust(bottom=max(fig.subplotpars.bottom, 0.14))
+        fig.canvas.draw()
+        bb = fig.get_tightbbox(fig.canvas.get_renderer())        # inches
+        h = fig.get_size_inches()[1]
+        fig.text(0.01, (bb.y0 - 0.06) / h, f"Джерело: {source}", fontsize=8, color=INK["muted"], ha="left", va="top")
     fig.savefig(path)
     plt.close(fig)
     return path

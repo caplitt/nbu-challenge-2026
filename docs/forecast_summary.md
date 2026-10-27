@@ -1,6 +1,6 @@
 # Підсумки прогнозу
 
-Згенеровано 2026-10-26 (`python make_docs.py`) з `results/key_numbers.json`.
+Згенеровано 2026-10-27 (`python make_docs.py`) з `results/key_numbers.json`.
 
 ## Рекомендація
 
