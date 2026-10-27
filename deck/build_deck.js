@@ -494,5 +494,19 @@ pres.writeFile({ fileName: OUT }).then(async (f) => {
   } else {
     console.warn("deck/apply_theme.js не знайдено — схемні кольори будуть стандартними для Office");
   }
+  await setLanguage(OUT, "uk-UA");
   console.log("Збережено:", f);
 });
+
+// pptxgenjs marks every run lang="en-US": PowerPoint then spell-checks the Ukrainian text as English and underlines
+// every word in red. Slides, notes, layouts and masters are re-tagged as Ukrainian.
+async function setLanguage(file, lang) {
+  const JSZip = require(require.resolve("jszip", { paths: [require.resolve("pptxgenjs")] }));
+  const zip = await JSZip.loadAsync(fs.readFileSync(file));
+  const parts = Object.keys(zip.files).filter((n) => /^ppt\/(slides|notesSlides|slideLayouts|slideMasters)\/[^/]+\.xml$/.test(n));
+  for (const n of parts) {
+    const xml = await zip.file(n).async("string");
+    zip.file(n, xml.replace(/lang="en-US"/g, `lang="${lang}"`));
+  }
+  fs.writeFileSync(file, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+}
